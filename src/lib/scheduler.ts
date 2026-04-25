@@ -50,12 +50,17 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
   const dates = rangeISO(startDate, endDate);
   const warnings: GenerateWarning[] = [];
 
+  // settings.requiredByWeekday is the single source of truth for required count.
+  // Existing day configs are preserved for events/closed only - their stale
+  // requiredCount is overwritten so settings changes always take effect on regen.
   const dayConfigs: DayConfig[] = dates.map((date) => {
     const fromInput = input.dayConfigs?.find((d) => d.date === date);
-    if (fromInput) return fromInput;
     const weekday = new Date(date).getDay();
     const required =
       settings.requiredByWeekday.find((r) => r.weekday === weekday)?.count ?? 4;
+    if (fromInput) {
+      return { ...fromInput, requiredCount: required };
+    }
     return { date, requiredCount: required, events: [], closed: false };
   });
 
@@ -115,6 +120,7 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         bumpCounters(m.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
       } else if (pref.status === "restricted" && pref.customRange) {
         const code = chooseShiftForRange(shiftTypes, pref.customRange) ?? "CUSTOM";
+        const matchedShift = shiftTypes.find((s) => s.code === code);
         assignments.push({
           date: day.date,
           memberId: m.id,
@@ -124,7 +130,7 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
           warnings: code === "CUSTOM" ? ["カスタム時間帯"] : [],
         });
         assignedMemberIds.add(m.id);
-        weight += 0.5;
+        weight += matchedShift?.countAs ?? 0.5;
         bumpCounters(m.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
       }
     }
