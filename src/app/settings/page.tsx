@@ -35,7 +35,7 @@ export default function SettingsPage() {
     <div>
       <PageHeader
         title="設定"
-        description="必要人数ルール、シフト種別、各種既定値を編集します。"
+        description="必要人数ルール、シフト種別、各種既定値を編集します。変更は自動保存されます（保存ボタンはありません）。"
       />
 
       <section className="mb-6 rounded-md border border-slate-200 bg-white p-4">
