@@ -9,12 +9,14 @@ import {
   parseCellPreference,
   type ImportedPreferences,
 } from "@/lib/excel";
+import { extractGridFromOcr, type OcrWord } from "@/lib/imageOcr";
 import type { DayPreference } from "@/lib/types";
 
 export default function ImportPage() {
   const { members, importState, schedule, shiftTypes, settings } = useAppStore();
   const [imported, setImported] = useState<ImportedPreferences | null>(null);
   const [defaultYear, setDefaultYear] = useState<number>(new Date().getFullYear());
+  const [startMonth, setStartMonth] = useState<number>(new Date().getMonth() + 1);
   const [filename, setFilename] = useState<string>("");
   const [addMissing, setAddMissing] = useState(true);
 
@@ -24,6 +26,7 @@ export default function ImportPage() {
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrText, setOcrText] = useState<string>("");
   const [ocrError, setOcrError] = useState<string>("");
+  const [ocrSummary, setOcrSummary] = useState<string>("");
   const objectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -54,6 +57,7 @@ export default function ImportPage() {
     setOcrProgress(0);
     setOcrError("");
     setOcrText("");
+    setOcrSummary("");
     try {
       // Lazy-load tesseract to keep main bundle small.
       const Tesseract = (await import("tesseract.js")).default;
@@ -65,6 +69,44 @@ export default function ImportPage() {
         },
       });
       setOcrText(result.data.text || "");
+
+      const words: OcrWord[] = (result.data.words ?? []).map((w) => ({
+        text: String(w.text ?? "").trim(),
+        bbox: w.bbox as { x0: number; y0: number; x1: number; y1: number },
+        confidence: w.confidence,
+      }));
+
+      const grid = extractGridFromOcr(words, {
+        startYear: defaultYear,
+        startMonth,
+      });
+      if (grid) {
+        const next: ImportedPreferences = {
+          byMember: grid.preferences,
+          dates: grid.dates,
+          uncertain: [],
+          warnings: grid.warnings,
+        };
+        for (const [name, prefs] of Object.entries(grid.preferences)) {
+          for (const [date, pref] of Object.entries(prefs)) {
+            if (pref.status === "uncertain") {
+              next.uncertain.push({
+                member: name,
+                date,
+                raw: grid.cells[name][date] ?? "",
+              });
+            }
+          }
+        }
+        setImported(next);
+        setOcrSummary(
+          `画像から ${grid.members.length} 名 / ${grid.dates.length} 日分を構造化しました。下表で内容を修正できます。`,
+        );
+      } else {
+        setOcrSummary(
+          "表構造を自動検出できませんでした。生テキストを参考に、Excelで取り込むか下表を手動入力してください。",
+        );
+      }
     } catch (e) {
       setOcrError((e as Error).message);
     } finally {
@@ -145,6 +187,28 @@ export default function ImportPage() {
             onChange={(e) => e.target.files?.[0] && onImageFile(e.target.files[0])}
             className="text-sm"
           />
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <label>
+              開始月:
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={startMonth}
+                onChange={(e) => setStartMonth(Number(e.target.value))}
+                className="ml-1 w-16 rounded border border-slate-300 px-1"
+              />
+            </label>
+            <label>
+              年:
+              <input
+                type="number"
+                value={defaultYear}
+                onChange={(e) => setDefaultYear(Number(e.target.value))}
+                className="ml-1 w-20 rounded border border-slate-300 px-1"
+              />
+            </label>
+          </div>
           <div className="mt-2 flex items-center gap-2">
             <button
               onClick={runOcr}
@@ -154,9 +218,14 @@ export default function ImportPage() {
               {ocrRunning ? `OCR 実行中… ${ocrProgress}%` : "OCR を実行 (jpn+eng)"}
             </button>
             <p className="text-xs text-slate-500">
-              ※ 手書きの○や複雑な表は誤認識しやすいです。プレビューを見ながら下表で修正してください。
+              ※ 手書きの○や複雑な表は誤認識しやすいです。下表で修正してください。
             </p>
           </div>
+          {ocrSummary && (
+            <p className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
+              {ocrSummary}
+            </p>
+          )}
           {ocrError && <p className="mt-2 text-xs text-rose-600">エラー: {ocrError}</p>}
         </div>
       </section>
