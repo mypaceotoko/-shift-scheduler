@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 import { useAppStore } from "@/lib/store";
 import {
@@ -16,14 +16,60 @@ export default function ImportPage() {
   const [imported, setImported] = useState<ImportedPreferences | null>(null);
   const [defaultYear, setDefaultYear] = useState<number>(new Date().getFullYear());
   const [filename, setFilename] = useState<string>("");
-  const [imageNote, setImageNote] = useState<string>("");
   const [addMissing, setAddMissing] = useState(true);
 
-  async function onFile(file: File) {
+  // Image OCR state
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [ocrRunning, setOcrRunning] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrText, setOcrText] = useState<string>("");
+  const [ocrError, setOcrError] = useState<string>("");
+  const objectUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, []);
+
+  async function onExcelFile(file: File) {
     setFilename(file.name);
     const buf = await file.arrayBuffer();
     const result = importPreferencesFromBuffer(buf, defaultYear);
     setImported(result);
+  }
+
+  function onImageFile(file: File) {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    const url = URL.createObjectURL(file);
+    objectUrlRef.current = url;
+    setImageUrl(url);
+    setOcrText("");
+    setOcrError("");
+  }
+
+  async function runOcr() {
+    if (!imageUrl) return;
+    setOcrRunning(true);
+    setOcrProgress(0);
+    setOcrError("");
+    setOcrText("");
+    try {
+      // Lazy-load tesseract to keep main bundle small.
+      const Tesseract = (await import("tesseract.js")).default;
+      const result = await Tesseract.recognize(imageUrl, "jpn+eng", {
+        logger: (m) => {
+          if (m.status === "recognizing text" && typeof m.progress === "number") {
+            setOcrProgress(Math.round(m.progress * 100));
+          }
+        },
+      });
+      setOcrText(result.data.text || "");
+    } catch (e) {
+      setOcrError((e as Error).message);
+    } finally {
+      setOcrRunning(false);
+    }
   }
 
   function applyToStore() {
@@ -62,7 +108,7 @@ export default function ImportPage() {
     <div>
       <PageHeader
         title="希望表の読み取り"
-        description="Excelファイルから希望表を読み込み、不確定なセルを修正します。画像はOCRが未実装のため、現状は手動補助として利用してください。"
+        description="Excelから自動取り込み、または画像をプレビュー＋OCRで読み取って下表で修正します。空欄は「未提出 = シフトに入れない」、○は「希望提出 = 出勤可」、／は「不可」と解釈します。"
       />
 
       <section className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -72,7 +118,7 @@ export default function ImportPage() {
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
-              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+              onChange={(e) => e.target.files?.[0] && onExcelFile(e.target.files[0])}
               className="text-sm"
             />
             <label className="text-xs text-slate-500">
@@ -87,30 +133,53 @@ export default function ImportPage() {
           </div>
           <p className="mt-2 text-xs text-slate-500">
             1列目にメンバー名、ヘッダー行に日付（例: 2026-04-26 や 4/26）を含むシートを想定。
-            空欄は「希望なし」、○は「出勤可」、／は「不可」、A〜F は固定シフト、13-18 などは時間帯指定として解釈します。
           </p>
           {filename && <p className="mt-2 text-xs text-slate-700">読み込み: {filename}</p>}
         </div>
 
         <div className="rounded-md border border-slate-200 bg-white p-4">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">画像から希望表（β）</h3>
+          <h3 className="mb-2 text-sm font-semibold text-slate-700">画像から読み取り</h3>
           <input
             type="file"
             accept="image/*"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              setImageNote(`「${f.name}」を選択。OCRは未実装のため、画像を見ながら下の表を直接編集してください。`);
-            }}
+            onChange={(e) => e.target.files?.[0] && onImageFile(e.target.files[0])}
             className="text-sm"
           />
-          {imageNote && <p className="mt-2 text-xs text-slate-500">{imageNote}</p>}
-          <p className="mt-2 text-xs text-slate-500">
-            画像OCRは将来差し替え可能なように <code>parseCellPreference</code> を共通化しています。
-            別エンジン（Tesseract.js / 外部API）を <code>src/lib/excel.ts</code> 同様の形で追加できます。
-          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={runOcr}
+              disabled={!imageUrl || ocrRunning}
+              className="rounded bg-brand-500 px-3 py-1.5 text-xs text-white hover:bg-brand-600 disabled:bg-slate-300"
+            >
+              {ocrRunning ? `OCR 実行中… ${ocrProgress}%` : "OCR を実行 (jpn+eng)"}
+            </button>
+            <p className="text-xs text-slate-500">
+              ※ 手書きの○や複雑な表は誤認識しやすいです。プレビューを見ながら下表で修正してください。
+            </p>
+          </div>
+          {ocrError && <p className="mt-2 text-xs text-rose-600">エラー: {ocrError}</p>}
         </div>
       </section>
+
+      {imageUrl && (
+        <section className="mb-6 rounded-md border border-slate-200 bg-white p-4">
+          <h3 className="mb-2 text-sm font-semibold text-slate-700">プレビュー</h3>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[2fr_1fr]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imageUrl}
+              alt="希望表"
+              className="max-h-[480px] w-full rounded border border-slate-200 object-contain"
+            />
+            <div className="overflow-auto">
+              <h4 className="mb-1 text-xs font-semibold text-slate-600">OCR結果（生テキスト）</h4>
+              <pre className="max-h-[480px] overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-tight text-slate-700">
+                {ocrText || (ocrRunning ? "実行中…" : "未実行")}
+              </pre>
+            </div>
+          </div>
+        </section>
+      )}
 
       {imported && (
         <section className="rounded-md border border-slate-200 bg-white p-4">

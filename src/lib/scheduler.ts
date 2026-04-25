@@ -187,6 +187,10 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
     }
 
     // 2. Greedy fill until requiredCount reached using prioritized candidates.
+    //    When the remaining capacity is fractional and only full shifts are
+    //    available, the top candidate's shift is auto-trimmed to a half slot
+    //    so that the day can be closed off at exactly the required count
+    //    (e.g. 3.5 with five full-shift requests → 3 full + 1 trimmed half).
     let safety = 0;
     while (weight + 1e-9 < target && safety++ < 50) {
       const candidates = collectCandidates({
@@ -202,23 +206,58 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
       });
       if (candidates.length === 0) break;
       candidates.sort((a, b) => b.weight - a.weight);
-      // Only accept candidates whose shift weight fits within the remaining cap.
       const remainingCap = target - weight;
-      const pick = candidates.find((c) => {
+
+      // Try fitting any candidate's preferred shift within remaining cap.
+      let pick = candidates.find((c) => {
         const s = shiftTypes.find((t) => t.code === c.shiftCode);
         return s && s.countAs <= remainingCap + 1e-9;
       });
-      if (!pick) break;
-      const shift = shiftTypes.find((s) => s.code === pick.shiftCode)!;
+      let chosenCode: string | undefined;
+      let chosenWeight = 0;
+      let customRange: { start: string; end: string } | undefined;
+      let trimmedWarning: string | undefined;
+
+      if (pick) {
+        const pickedCode = pick.shiftCode;
+        chosenCode = pickedCode;
+        chosenWeight = shiftTypes.find((s) => s.code === pickedCode)!.countAs;
+      } else if (remainingCap + 1e-9 >= 0.5) {
+        // No shift fits whole - pick a candidate and trim their preferred
+        // full shift down to a ~4 hour half slot.
+        pick = candidates[0];
+        const pickedCode = pick.shiftCode;
+        const s = shiftTypes.find((t) => t.code === pickedCode);
+        if (!s) break;
+        const trimmed = trimRangeToHalf({ start: s.start, end: s.end });
+        const matchedHalf = chooseShiftForRange(shiftTypes, trimmed);
+        if (matchedHalf) {
+          chosenCode = matchedHalf;
+          chosenWeight = shiftTypes.find((t) => t.code === matchedHalf)!.countAs;
+        } else {
+          chosenCode = "CUSTOM";
+          chosenWeight = 0.5;
+          customRange = trimmed;
+        }
+        trimmedWarning = `人数上限のため ${s.start}-${s.end} → ${trimmed.start}-${trimmed.end} に短縮`;
+      } else {
+        break;
+      }
+
+      if (!chosenCode || !pick) break;
+      const cellWarnings: string[] = [];
+      if (pick.forced) cellWarnings.push("条件超過");
+      if (trimmedWarning) cellWarnings.push(trimmedWarning);
       assignments.push({
         date: day.date,
         memberId: pick.member.id,
-        shiftCode: pick.shiftCode,
+        shiftCode: chosenCode,
+        customRange,
         manuallyEdited: false,
-        warnings: pick.forced ? ["条件超過"] : [],
+        warnings: cellWarnings,
       });
       assignedMemberIds.add(pick.member.id);
-      weight += shift.countAs;
+      weight += chosenWeight;
       bumpCounters(pick.member.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
     }
 
@@ -281,8 +320,10 @@ function collectCandidates(args: {
   for (const m of args.members) {
     if (args.assignedMemberIds.has(m.id)) continue;
     const pref = m.preferences[args.day.date];
-    if (pref?.status === "unavailable") continue;
-    if (pref?.status === "uncertain") continue; // require manual review
+    // Strict: only members who explicitly marked "available" (○) are eligible
+    // for greedy fill. Empty cells / unavailable / uncertain are excluded.
+    // Fixed and restricted preferences are handled in step 1, not here.
+    if (!pref || pref.status !== "available") continue;
 
     // Determine candidate shift codes for this member.
     const allowed = candidateShiftCodes(m, args.shiftTypes);

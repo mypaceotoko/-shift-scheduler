@@ -18,14 +18,15 @@ function pad2(n: number): string {
 }
 
 /** Parse a single cell value to a DayPreference.
- *  - "" / "／" / "/" / "x" => unavailable
- *  - "○" => available
+ *  - "" => unavailable (no preference submitted - exclude from schedule)
+ *  - "／" / "/" / "x" / "休" / "公休" => unavailable
+ *  - "○" / "◯" / "〇" => available (eligible for assignment)
  *  - "T", "B", ... => fixed shift code
  *  - "13-18", "18-", "-16" => restricted custom range
  *  - anything else => uncertain (kept for review). */
 export function parseCellPreference(raw: unknown): DayPreference {
   const text = String(raw ?? "").trim();
-  if (!text) return { status: "available", note: "" };
+  if (!text) return { status: "unavailable", note: "" };
   const lower = text.toLowerCase();
   if (text === "／" || text === "/" || lower === "x" || text === "✕" || text === "休" || text === "公休") {
     return { status: "unavailable", note: text };
