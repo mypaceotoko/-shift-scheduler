@@ -99,18 +99,47 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
       .filter((a) => a.date === day.date)
       .reduce((sum, a) => sum + (shiftTypes.find((s) => s.code === a.shiftCode)?.countAs ?? 1), 0);
 
-    // 1. Forced/fixed preferences for the day - always slot them in.
-    for (const m of activeMembers) {
-      if (assignedMemberIds.has(m.id)) continue;
-      const pref = m.preferences[day.date];
-      if (!pref) continue;
-      if (pref.status === "fixed" && pref.shiftCode) {
-        const shift = shiftTypes.find((s) => s.code === pref.shiftCode);
+    // 1. Honor fixed/restricted preferences, but never exceed requiredCount.
+    //    Sort by member priority so higher-priority members win the limited slots.
+    //    For time-range (restricted) preferences, attempt to trim to half-shift
+    //    when full duration would exceed the cap.
+    const target = day.requiredCount;
+    const preferred = activeMembers
+      .filter((m) => !assignedMemberIds.has(m.id))
+      .map((m) => ({ m, pref: m.preferences[day.date] }))
+      .filter(
+        (x) =>
+          (x.pref?.status === "fixed" && x.pref.shiftCode) ||
+          (x.pref?.status === "restricted" && x.pref.customRange),
+      )
+      .sort((a, b) => b.m.priority - a.m.priority);
+
+    for (const { m, pref } of preferred) {
+      const remaining = target - weight;
+      if (remaining <= 1e-9) {
+        warnings.push({
+          date: day.date,
+          level: "warning",
+          message: `${m.name} の希望 (${pref!.note ?? pref!.shiftCode ?? "時間帯指定"}) は人数上限により未割当`,
+        });
+        continue;
+      }
+
+      if (pref!.status === "fixed" && pref!.shiftCode) {
+        const shift = shiftTypes.find((s) => s.code === pref!.shiftCode);
         if (!shift) continue;
+        if (shift.countAs > remaining + 1e-9) {
+          warnings.push({
+            date: day.date,
+            level: "warning",
+            message: `${m.name} の固定希望 ${pref!.shiftCode} (重み ${shift.countAs}) は残り ${remaining} に収まらず未割当`,
+          });
+          continue;
+        }
         assignments.push({
           date: day.date,
           memberId: m.id,
-          shiftCode: pref.shiftCode,
+          shiftCode: pref!.shiftCode,
           customRange: undefined,
           manuallyEdited: false,
           warnings: [],
@@ -118,25 +147,46 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         assignedMemberIds.add(m.id);
         weight += shift.countAs;
         bumpCounters(m.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
-      } else if (pref.status === "restricted" && pref.customRange) {
-        const code = chooseShiftForRange(shiftTypes, pref.customRange) ?? "CUSTOM";
-        const matchedShift = shiftTypes.find((s) => s.code === code);
+      } else if (pref!.status === "restricted" && pref!.customRange) {
+        const range = pref!.customRange;
+        const fullWeight = weightForRange(range);
+        let chosenRange = range;
+        let chosenWeight = fullWeight;
+        let trimmed = false;
+        if (fullWeight > remaining + 1e-9) {
+          if (remaining + 1e-9 >= 0.5) {
+            chosenRange = trimRangeToHalf(range);
+            chosenWeight = 0.5;
+            trimmed = true;
+          } else {
+            warnings.push({
+              date: day.date,
+              level: "warning",
+              message: `${m.name} の時間帯希望 ${range.start}-${range.end} は人数上限により未割当`,
+            });
+            continue;
+          }
+        }
+        const code = chooseShiftForRange(shiftTypes, chosenRange) ?? "CUSTOM";
+        const cellWarnings: string[] = [];
+        if (trimmed)
+          cellWarnings.push(`人数上限のため ${range.start}-${range.end} → ${chosenRange.start}-${chosenRange.end} に短縮`);
+        if (code === "CUSTOM") cellWarnings.push("カスタム時間帯");
         assignments.push({
           date: day.date,
           memberId: m.id,
           shiftCode: code,
-          customRange: pref.customRange,
+          customRange: chosenRange,
           manuallyEdited: false,
-          warnings: code === "CUSTOM" ? ["カスタム時間帯"] : [],
+          warnings: cellWarnings,
         });
         assignedMemberIds.add(m.id);
-        weight += matchedShift?.countAs ?? 0.5;
+        weight += chosenWeight;
         bumpCounters(m.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
       }
     }
 
     // 2. Greedy fill until requiredCount reached using prioritized candidates.
-    const target = day.requiredCount;
     let safety = 0;
     while (weight + 1e-9 < target && safety++ < 50) {
       const candidates = collectCandidates({
@@ -152,9 +202,14 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
       });
       if (candidates.length === 0) break;
       candidates.sort((a, b) => b.weight - a.weight);
-      const pick = candidates[0];
-      const shift = shiftTypes.find((s) => s.code === pick.shiftCode);
-      if (!shift) break;
+      // Only accept candidates whose shift weight fits within the remaining cap.
+      const remainingCap = target - weight;
+      const pick = candidates.find((c) => {
+        const s = shiftTypes.find((t) => t.code === c.shiftCode);
+        return s && s.countAs <= remainingCap + 1e-9;
+      });
+      if (!pick) break;
+      const shift = shiftTypes.find((s) => s.code === pick.shiftCode)!;
       assignments.push({
         date: day.date,
         memberId: pick.member.id,
@@ -283,6 +338,31 @@ function chooseShiftForRange(
   );
   if (matches.length > 0) return matches[0].code;
   return undefined;
+}
+
+function timeToMin(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+function minToTime(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Headcount weight for a custom time window. ≥6h counts as 1.0, otherwise 0.5. */
+function weightForRange(range: { start: string; end: string }): number {
+  const hours = (timeToMin(range.end) - timeToMin(range.start)) / 60;
+  return hours >= 6 ? 1 : 0.5;
+}
+
+/** Shorten a range to ~4 hours by pushing the start later. Keeps the original
+ *  end time on the assumption that closing-time coverage is more critical. */
+function trimRangeToHalf(range: { start: string; end: string }): { start: string; end: string } {
+  const endMin = timeToMin(range.end);
+  const startMin = Math.max(timeToMin(range.start), endMin - 240);
+  return { start: minToTime(startMin), end: range.end };
 }
 
 // =============================================================================
