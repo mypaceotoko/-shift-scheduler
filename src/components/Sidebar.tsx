@@ -24,7 +24,9 @@ export default function Sidebar() {
       </div>
       <nav className="flex flex-col gap-1">
         {NAV.map((item) => {
-          const active = pathname === item.href;
+          const normalized = (pathname ?? "/").replace(/\/$/, "") || "/";
+          const target = item.href.replace(/\/$/, "") || "/";
+          const active = normalized === target;
           return (
             <Link
               key={item.href}
