@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import { useAppStore } from "@/lib/store";
 import { generateSchedule, type GenerateWarning } from "@/lib/scheduler";
@@ -68,18 +69,37 @@ export default function GeneratePage() {
         </Field>
       </section>
 
-      <div className="mb-6 flex gap-2">
-        <button
-          onClick={run}
-          disabled={members.length === 0}
-          className="rounded bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:bg-slate-300"
-        >
-          {schedule ? "再生成" : "生成する"}
-        </button>
-        {members.length === 0 && (
-          <p className="text-xs text-slate-500">先にメンバーを登録してください。</p>
-        )}
-      </div>
+      {members.length === 0 ? (
+        <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <p className="mb-2 font-medium">メンバーがまだ登録されていません。</p>
+          <p className="mb-3 text-xs">
+            希望表（Excel・CSV・画像）を読み込めば、メンバーが自動で取り込まれます。手動で登録もできます。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/import"
+              className="rounded bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-600"
+            >
+              希望表を読み込む →
+            </Link>
+            <Link
+              href="/members"
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              メンバー管理へ
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-6 flex gap-2">
+          <button
+            onClick={run}
+            className="rounded bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
+          >
+            {schedule ? "再生成" : "生成する"}
+          </button>
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <section className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">

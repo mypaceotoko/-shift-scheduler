@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import { useAppStore } from "@/lib/store";
 import {
@@ -13,6 +14,7 @@ import { extractGridFromOcr, type OcrWord } from "@/lib/imageOcr";
 import type { DayPreference } from "@/lib/types";
 
 export default function ImportPage() {
+  const router = useRouter();
   const { members, importState, schedule, shiftTypes, settings } = useAppStore();
   const [imported, setImported] = useState<ImportedPreferences | null>(null);
   const [defaultYear, setDefaultYear] = useState<number>(new Date().getFullYear());
@@ -114,7 +116,7 @@ export default function ImportPage() {
     }
   }
 
-  function applyToStore() {
+  function applyToStore(navigateToGenerate = false) {
     if (!imported) return;
     const next = applyImportedPreferences(members, imported, { addMissing });
     importState({
@@ -123,7 +125,11 @@ export default function ImportPage() {
       schedule,
       settings,
     });
-    alert("希望表を反映しました。メンバー画面で確認できます。");
+    if (navigateToGenerate) {
+      router.push("/generate");
+    } else {
+      alert("希望表を反映しました。メンバー画面で確認できます。");
+    }
   }
 
   function updateCell(memberName: string, date: string, raw: string) {
@@ -264,7 +270,7 @@ export default function ImportPage() {
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <label className="text-xs">
                 <input
                   type="checkbox"
@@ -274,10 +280,16 @@ export default function ImportPage() {
                 <span className="ml-1">名前が一致しないメンバーは新規追加</span>
               </label>
               <button
-                onClick={applyToStore}
-                className="rounded bg-brand-500 px-3 py-1.5 text-sm text-white hover:bg-brand-600"
+                onClick={() => applyToStore(false)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               >
                 メンバーに反映
+              </button>
+              <button
+                onClick={() => applyToStore(true)}
+                className="rounded bg-brand-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-600"
+              >
+                反映 → シフト生成へ
               </button>
             </div>
           </div>
