@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800 antialiased;
+}
+
+/* Schedule grid utilities */
+.cell-base {
+  @apply h-10 min-w-[44px] border border-slate-200 text-center text-sm;
+}
+
+.shift-S { @apply bg-amber-100 text-amber-900; }
+.shift-T { @apply bg-orange-100 text-orange-900; }
+.shift-B { @apply bg-emerald-100 text-emerald-900; }
+.shift-C { @apply bg-cyan-100 text-cyan-900; }
+.shift-D { @apply bg-indigo-100 text-indigo-900; }
+.shift-F { @apply bg-rose-100 text-rose-900; }
+.shift-A { @apply bg-yellow-100 text-yellow-900; }
+.shift-OFF { @apply bg-slate-100 text-slate-400; }
+.shift-CUSTOM { @apply bg-violet-100 text-violet-900; }
