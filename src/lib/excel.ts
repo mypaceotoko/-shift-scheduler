@@ -104,18 +104,18 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
     return result;
   }
 
-  // Look for a "X月" month-context row in the preceding rows (within 5 rows).
+  // Look for a "X月" month-context row in the preceding rows (within 10 rows).
   // Common Japanese format: month header row above the day-number row.
   const monthByCol = new Map<number, number>();
-  for (let r = Math.max(0, headerRowIdx - 5); r < headerRowIdx; r++) {
+  for (let r = Math.max(0, headerRowIdx - 10); r < headerRowIdx; r++) {
     const monthRow = rows[r];
-    const hasMonthMarker = monthRow.some((cell) => /^\d{1,2}月$/.test(String(cell ?? "").trim()));
+    const hasMonthMarker = monthRow.some((cell) => parseMonthLabel(String(cell ?? "")) !== null);
     if (!hasMonthMarker) continue;
     // Propagate each month rightward until the next marker.
     let currentMonth = -1;
     for (let c = 0; c < monthRow.length; c++) {
-      const m = String(monthRow[c] ?? "").trim().match(/^(\d{1,2})月$/);
-      if (m) currentMonth = Number(m[1]);
+      const month = parseMonthLabel(String(monthRow[c] ?? ""));
+      if (month !== null) currentMonth = month;
       if (currentMonth > 0) monthByCol.set(c, currentMonth);
     }
     break;
@@ -216,6 +216,17 @@ function extractDayNumber(v: unknown): number | null {
     return n >= 1 && n <= 31 ? n : null;
   }
   return null;
+}
+
+/** Parse a cell value as a month label like "4月", "４月", "4 月", "2026年4月".
+ *  Returns the month number (1-12) or null if not recognized. */
+function parseMonthLabel(raw: string): number | null {
+  // Normalize full-width digits (０-９) to ASCII digits.
+  const s = raw.trim().replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const m = s.match(/(\d{1,2})\s*月/);
+  if (!m) return null;
+  const month = Number(m[1]);
+  return month >= 1 && month <= 12 ? month : null;
 }
 
 // =============================================================================
