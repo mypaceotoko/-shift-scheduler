@@ -78,7 +78,7 @@ export function extractGridFromOcr(
       headerIdx = i;
     }
   }
-  if (headerIdx < 0 || bestDateCount < 5) return null;
+  if (headerIdx < 0 || bestDateCount < 3) return null;
 
   // Extract date columns from the header row.
   const headerWords = rows[headerIdx]
@@ -123,17 +123,23 @@ export function extractGridFromOcr(
     });
   }
 
-  const firstColX = dateColumns[0].x0 - 5;
+  // Member name column boundary: anything starting before the first date column.
+  const firstDateX = dateColumns[0].x0;
 
   // Member rows are rows below the header whose leftmost cluster contains kanji/kana.
   const memberRows: { name: string; words: OcrWord[] }[] = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
-    const leftWords = row.filter((w) => w.bbox.x1 <= firstColX + 10);
+    // A word belongs to the member column if it starts before the first date column
+    // (with a small tolerance to handle OCR alignment variance).
+    const leftWords = row.filter((w) => w.bbox.x0 < firstDateX + 15);
     if (leftWords.length === 0) continue;
-    const name = leftWords.map((w) => w.text).join(" ").trim();
+    const name = leftWords.map((w) => w.text).join("").trim();
     if (!name) continue;
-    if (!/[぀-ヿ一-龯]/.test(name)) continue;
+    // Accept names containing kanji, kana, or at least 2 characters
+    // (some names may be read as romaji by OCR).
+    if (name.length < 2) continue;
+    if (!/[぀-ヿ一-鿿]/.test(name) && !/^[A-Za-zァ-ン]+$/.test(name)) continue;
     if (/(出勤人数|合計|メンバー|イベント|WEEK|DATE)/.test(name)) continue;
     memberRows.push({ name, words: row });
   }
