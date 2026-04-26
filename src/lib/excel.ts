@@ -109,12 +109,12 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
   const monthByCol = new Map<number, number>();
   for (let r = Math.max(0, headerRowIdx - 10); r < headerRowIdx; r++) {
     const monthRow = rows[r];
-    const hasMonthMarker = monthRow.some((cell) => parseMonthLabel(String(cell ?? "")) !== null);
+    const hasMonthMarker = monthRow.some((cell) => parseMonthLabel(cell) !== null);
     if (!hasMonthMarker) continue;
     // Propagate each month rightward until the next marker.
     let currentMonth = -1;
     for (let c = 0; c < monthRow.length; c++) {
-      const month = parseMonthLabel(String(monthRow[c] ?? ""));
+      const month = parseMonthLabel(monthRow[c]);
       if (month !== null) currentMonth = month;
       if (currentMonth > 0) monthByCol.set(c, currentMonth);
     }
@@ -218,11 +218,18 @@ function extractDayNumber(v: unknown): number | null {
   return null;
 }
 
-/** Parse a cell value as a month label like "4月", "４月", "4 月", "2026年4月".
+/** Parse a cell value as a month label like "4月", "４月", "4 月", "2026年4月",
+ *  or an Excel serial date where the month is inferred from the date.
  *  Returns the month number (1-12) or null if not recognized. */
-function parseMonthLabel(raw: string): number | null {
+function parseMonthLabel(raw: unknown): number | null {
+  // Excel serial date stored as a number — extract its month.
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 1000) {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(epoch.getTime() + raw * 86400000);
+    return d.getUTCMonth() + 1;
+  }
   // Normalize full-width digits (０-９) to ASCII digits.
-  const s = raw.trim().replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const s = String(raw ?? "").trim().replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   const m = s.match(/(\d{1,2})\s*月/);
   if (!m) return null;
   const month = Number(m[1]);
