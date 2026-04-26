@@ -132,6 +132,8 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
 }
 
 function looksLikeDate(v: unknown): boolean {
+  // Excel serial dates for modern years (2000+) are > 36000
+  if (typeof v === "number" && Number.isFinite(v) && v > 1000) return true;
   const s = String(v ?? "").trim();
   if (!s) return false;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;

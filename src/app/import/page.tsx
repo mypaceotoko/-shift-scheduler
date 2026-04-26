@@ -21,6 +21,7 @@ export default function ImportPage() {
   const [startMonth, setStartMonth] = useState<number>(new Date().getMonth() + 1);
   const [filename, setFilename] = useState<string>("");
   const [addMissing, setAddMissing] = useState(true);
+  const [importError, setImportError] = useState<string>("");
 
   // Image OCR state
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -39,9 +40,14 @@ export default function ImportPage() {
 
   async function onExcelFile(file: File) {
     setFilename(file.name);
-    const buf = await file.arrayBuffer();
-    const result = importPreferencesFromBuffer(buf, defaultYear);
-    setImported(result);
+    setImportError("");
+    try {
+      const buf = await file.arrayBuffer();
+      const result = importPreferencesFromBuffer(buf, defaultYear);
+      setImported(result);
+    } catch (e) {
+      setImportError(`ファイルの読み込みに失敗しました: ${(e as Error).message}`);
+    }
   }
 
   function onImageFile(file: File) {
@@ -183,6 +189,7 @@ export default function ImportPage() {
             1列目にメンバー名、ヘッダー行に日付（例: 2026-04-26 や 4/26）を含むシートを想定。
           </p>
           {filename && <p className="mt-2 text-xs text-slate-700">読み込み: {filename}</p>}
+          {importError && <p className="mt-2 text-xs text-rose-600">{importError}</p>}
         </div>
 
         <div className="rounded-md border border-slate-200 bg-white p-4">
