@@ -38,6 +38,12 @@ export default function ImportPage() {
     };
   }, []);
 
+  function autoApply(result: ImportedPreferences) {
+    if (result.dates.length === 0 || Object.keys(result.byMember).length === 0) return;
+    const next = applyImportedPreferences(members, result, { addMissing: true });
+    importState({ members: next, shiftTypes, schedule, settings });
+  }
+
   async function onExcelFile(file: File) {
     setFilename(file.name);
     setImportError("");
@@ -45,6 +51,7 @@ export default function ImportPage() {
       const buf = await file.arrayBuffer();
       const result = importPreferencesFromBuffer(buf, defaultYear);
       setImported(result);
+      autoApply(result);
     } catch (e) {
       setImportError(`ファイルの読み込みに失敗しました: ${(e as Error).message}`);
     }
@@ -107,6 +114,7 @@ export default function ImportPage() {
           }
         }
         setImported(next);
+        autoApply(next);
         setOcrSummary(
           `画像から ${grid.members.length} 名 / ${grid.dates.length} 日分を構造化しました。下表で内容を修正できます。`,
         );
@@ -276,6 +284,9 @@ export default function ImportPage() {
                   </span>
                 )}
               </p>
+              {imported.dates.length > 0 && Object.keys(imported.byMember).length > 0 && (
+                <p className="mt-1 text-xs text-emerald-600">メンバーに自動反映しました。修正後は「メンバーに反映」を再度押してください。</p>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-xs">
