@@ -96,18 +96,60 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
     return result;
   }
 
-  // Find header row (row whose values look like dates).
-  const headerRowIdx = rows.findIndex((r) => r.slice(1).some(looksLikeDate));
+  // Find header row: need at least 3 date-like values to avoid mistaking
+  // shift-definition rows (which may have a few standalone numbers) for the date row.
+  const headerRowIdx = rows.findIndex((r) => r.slice(1).filter(looksLikeDate).length >= 3);
   if (headerRowIdx < 0) {
     result.warnings.push("日付ヘッダー行を検出できませんでした。");
     return result;
   }
+
+  // Look for a "X月" month-context row in the preceding rows (within 5 rows).
+  // Common Japanese format: month header row above the day-number row.
+  const monthByCol = new Map<number, number>();
+  for (let r = Math.max(0, headerRowIdx - 5); r < headerRowIdx; r++) {
+    const monthRow = rows[r];
+    const hasMonthMarker = monthRow.some((cell) => /^\d{1,2}月$/.test(String(cell ?? "").trim()));
+    if (!hasMonthMarker) continue;
+    // Propagate each month rightward until the next marker.
+    let currentMonth = -1;
+    for (let c = 0; c < monthRow.length; c++) {
+      const m = String(monthRow[c] ?? "").trim().match(/^(\d{1,2})月$/);
+      if (m) currentMonth = Number(m[1]);
+      if (currentMonth > 0) monthByCol.set(c, currentMonth);
+    }
+    break;
+  }
+
   const header = rows[headerRowIdx];
   const dateColumns: { col: number; date: string }[] = [];
+  let prevMonth = -1;
+  let yearOffset = 0;
+
   for (let c = 1; c < header.length; c++) {
     const cell = header[c];
-    const iso = toISOFromHeader(cell, defaultYear);
+    let iso = toISOFromHeader(cell, defaultYear);
+
+    // If no full date resolved, try combining a day number with month context.
+    if (!iso) {
+      const dayNum = extractDayNumber(cell);
+      const month = monthByCol.get(c) ?? -1;
+      if (dayNum !== null && month > 0) {
+        // Detect year rollover when month sequence decreases (e.g., Dec→Jan).
+        if (prevMonth > 0 && prevMonth > month) yearOffset++;
+        prevMonth = month;
+        iso = `${defaultYear + yearOffset}-${pad2(month)}-${pad2(dayNum)}`;
+      }
+    }
+
     if (iso) dateColumns.push({ col: c, date: iso });
+  }
+
+  if (dateColumns.length === 0) {
+    result.warnings.push(
+      "日付列を検出できませんでした。ヘッダー行の日付形式（例: 4/26 または 2026-04-26）または月見出し行（例: 4月）を確認してください。",
+    );
+    return result;
   }
   result.dates = dateColumns.map((d) => d.date);
 
@@ -145,20 +187,33 @@ function looksLikeDate(v: unknown): boolean {
 function toISOFromHeader(v: unknown, defaultYear: number): string | null {
   if (v == null) return null;
   if (typeof v === "number") {
-    // Excel serial date
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    const d = new Date(epoch.getTime() + v * 86400000);
-    return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+    if (!Number.isFinite(v)) return null;
+    // Only treat large numbers as Excel serial dates (modern dates are > 36000).
+    // Small numbers (1-31) are day numbers handled by extractDayNumber + month context.
+    if (v > 1000) {
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      const d = new Date(epoch.getTime() + v * 86400000);
+      return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+    }
+    return null;
   }
   const s = String(v).trim();
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const md = s.match(/^(\d{1,2})\/(\d{1,2})$/);
   if (md) return `${defaultYear}-${pad2(Number(md[1]))}-${pad2(Number(md[2]))}`;
-  const d = s.match(/^(\d{1,2})$/);
-  if (d) {
-    // Day-only - assume current month from sibling cells; handled by caller via defaultYear hack.
-    return null;
+  return null;
+}
+
+function extractDayNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 31) {
+    return Math.round(v);
+  }
+  const s = String(v ?? "").trim();
+  const m = s.match(/^(\d{1,2})$/);
+  if (m) {
+    const n = Number(m[1]);
+    return n >= 1 && n <= 31 ? n : null;
   }
   return null;
 }
