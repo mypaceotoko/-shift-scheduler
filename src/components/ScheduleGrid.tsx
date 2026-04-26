@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { useMemo } from "react";
 import { useAppStore } from "@/lib/store";
 import { rangeISO, weekdayLabel, isWeekend } from "@/lib/dateUtils";
-import { dailyHeadcount } from "@/lib/scheduler";
+import { dailyHeadcount, effectiveCountAs } from "@/lib/scheduler";
 import type { Assignment } from "@/lib/types";
 
 export default function ScheduleGrid({ editable = true }: { editable?: boolean }) {
@@ -105,7 +105,7 @@ export default function ScheduleGrid({ editable = true }: { editable?: boolean }
                   {dates.map((d) => {
                     const a = cellFor(d, m.id);
                     const cfg = schedule.dayConfigs.find((x) => x.date === d);
-                    if (a) total += shiftTypes.find((s) => s.code === a.shiftCode)?.countAs ?? 1;
+                    if (a) total += effectiveCountAs(a, shiftTypes);
                     const pref = m.preferences[d];
                     const unavailable = pref?.status === "unavailable";
                     return (

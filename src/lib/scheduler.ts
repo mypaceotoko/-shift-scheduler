@@ -97,7 +97,7 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
     );
     let weight = assignments
       .filter((a) => a.date === day.date)
-      .reduce((sum, a) => sum + (shiftTypes.find((s) => s.code === a.shiftCode)?.countAs ?? 1), 0);
+      .reduce((sum, a) => sum + effectiveCountAs(a, shiftTypes), 0);
 
     // 1. Honor fixed/restricted preferences, but never exceed requiredCount.
     //    Sort by member priority so higher-priority members win the limited slots.
@@ -222,25 +222,8 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         const pickedCode = pick.shiftCode;
         chosenCode = pickedCode;
         chosenWeight = shiftTypes.find((s) => s.code === pickedCode)!.countAs;
-      } else if (remainingCap + 1e-9 >= 0.5) {
-        // No shift fits whole - pick a candidate and trim their preferred
-        // full shift down to a ~4 hour half slot.
-        pick = candidates[0];
-        const pickedCode = pick.shiftCode;
-        const s = shiftTypes.find((t) => t.code === pickedCode);
-        if (!s) break;
-        const trimmed = trimRangeToHalf({ start: s.start, end: s.end });
-        const matchedHalf = chooseShiftForRange(shiftTypes, trimmed);
-        if (matchedHalf) {
-          chosenCode = matchedHalf;
-          chosenWeight = shiftTypes.find((t) => t.code === matchedHalf)!.countAs;
-        } else {
-          chosenCode = "CUSTOM";
-          chosenWeight = 0.5;
-          customRange = trimmed;
-        }
-        trimmedWarning = `人数上限のため ${s.start}-${s.end} → ${trimmed.start}-${trimmed.end} に短縮`;
       } else {
+        // No shift fits within remaining capacity — stop filling.
         break;
       }
 
@@ -373,9 +356,9 @@ function chooseShiftForRange(
   shiftTypes: ShiftType[],
   range: { start: string; end: string },
 ): string | undefined {
-  // Pick the working shift whose [start,end] is closest contained.
+  // Pick the working shift fully contained within the restriction range.
   const matches = shiftTypes.filter(
-    (s) => !s.isOff && s.start <= range.start && s.end >= range.end,
+    (s) => !s.isOff && s.start >= range.start && s.end <= range.end,
   );
   if (matches.length > 0) return matches[0].code;
   return undefined;
@@ -396,6 +379,14 @@ function minToTime(min: number): string {
 function weightForRange(range: { start: string; end: string }): number {
   const hours = (timeToMin(range.end) - timeToMin(range.start)) / 60;
   return hours >= 6 ? 1 : 0.5;
+}
+
+/** Effective countAs for an assignment, handling CUSTOM-range assignments. */
+export function effectiveCountAs(a: Assignment, shiftTypes: ShiftType[]): number {
+  const found = shiftTypes.find((s) => s.code === a.shiftCode);
+  if (found) return found.countAs;
+  if (a.customRange) return weightForRange(a.customRange);
+  return 1;
 }
 
 /** Shorten a range to ~4 hours by pushing the start later. Keeps the original
@@ -435,5 +426,5 @@ export function computeStats(schedule: Schedule, shiftTypes: ShiftType[]): Membe
 export function dailyHeadcount(schedule: Schedule, shiftTypes: ShiftType[], date: string): number {
   return schedule.assignments
     .filter((a) => a.date === date)
-    .reduce((sum, a) => sum + (shiftTypes.find((s) => s.code === a.shiftCode)?.countAs ?? 1), 0);
+    .reduce((sum, a) => sum + effectiveCountAs(a, shiftTypes), 0);
 }
