@@ -3,6 +3,7 @@
 import * as XLSX from "xlsx";
 import type { DayPreference, Member, Schedule, ShiftType } from "./types";
 import { rangeISO, weekdayLabel } from "./dateUtils";
+import { effectiveCountAs } from "./scheduler";
 
 // =============================================================================
 // Cell text -> DayPreference parsing
@@ -314,7 +315,7 @@ export function exportScheduleToXLSX(
         row.push("");
         continue;
       }
-      const w = shiftTypes.find((s) => s.code === a.shiftCode)?.countAs ?? 1;
+      const w = effectiveCountAs(a, shiftTypes);
       total += w;
       const cell = a.customRange ? `${a.customRange.start.slice(0, 5)}-${a.customRange.end.slice(0, 5)}` : a.shiftCode;
       row.push(cell);
@@ -328,7 +329,7 @@ export function exportScheduleToXLSX(
   for (const date of dates) {
     const sum = schedule.assignments
       .filter((a) => a.date === date)
-      .reduce((s, a) => s + (shiftTypes.find((t) => t.code === a.shiftCode)?.countAs ?? 1), 0);
+      .reduce((s, a) => s + effectiveCountAs(a, shiftTypes), 0);
     footer.push(sum);
   }
   footer.push("");

@@ -113,7 +113,9 @@ export default function ScheduleGrid({ editable = true }: { editable?: boolean }
                         key={d}
                         className={clsx(
                           "cell-base p-0",
-                          a?.shiftCode && shiftTypes.find((s) => s.code === a.shiftCode)?.color,
+                          a?.shiftCode === "CUSTOM"
+                            ? "bg-violet-50 text-violet-700"
+                            : a?.shiftCode && shiftTypes.find((s) => s.code === a.shiftCode)?.color,
                           a?.manuallyEdited && "ring-1 ring-inset ring-brand-500",
                           unavailable && !a && "bg-slate-100 text-slate-300",
                           cfg?.closed && "bg-slate-200",
@@ -132,9 +134,18 @@ export default function ScheduleGrid({ editable = true }: { editable?: boolean }
                                 {c || (unavailable ? "／" : "")}
                               </option>
                             ))}
+                            {a?.shiftCode === "CUSTOM" && (
+                              <option value="CUSTOM">
+                                {a.customRange
+                                  ? `${a.customRange.start.slice(0, 2)}-${a.customRange.end.slice(0, 2)}`
+                                  : "カスタム"}
+                              </option>
+                            )}
                           </select>
                         ) : (
-                          a?.shiftCode ?? (unavailable ? "／" : "")
+                          a?.shiftCode === "CUSTOM" && a.customRange
+                            ? `${a.customRange.start.slice(0, 2)}-${a.customRange.end.slice(0, 2)}`
+                            : (a?.shiftCode ?? (unavailable ? "／" : ""))
                         )}
                       </td>
                     );
