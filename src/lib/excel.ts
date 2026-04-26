@@ -74,7 +74,11 @@ export interface ImportedPreferences {
 /** Read an XLSX/CSV file (already parsed to ArrayBuffer) and extract preferences.
  *  Expected format: first column = member name, header row = ISO dates or
  *  month/day labels. Falls back to best-effort. */
-export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: number): ImportedPreferences {
+export function importPreferencesFromBuffer(
+  buf: ArrayBuffer,
+  defaultYear: number,
+  startMonth = 1,
+): ImportedPreferences {
   const wb = XLSX.read(buf, { type: "array" });
   const sheetName = wb.SheetNames[0];
   const sheet = wb.Sheets[sheetName];
@@ -125,6 +129,9 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
   const dateColumns: { col: number; date: string }[] = [];
   let prevMonth = -1;
   let yearOffset = 0;
+  // Fallback month used when no "X月" context row was found.
+  let fallbackMonth = startMonth;
+  let prevDayNum: number | null = null;
 
   for (let c = 1; c < header.length; c++) {
     const cell = header[c];
@@ -133,12 +140,25 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
     // If no full date resolved, try combining a day number with month context.
     if (!iso) {
       const dayNum = extractDayNumber(cell);
-      const month = monthByCol.get(c) ?? -1;
-      if (dayNum !== null && month > 0) {
-        // Detect year rollover when month sequence decreases (e.g., Dec→Jan).
-        if (prevMonth > 0 && prevMonth > month) yearOffset++;
-        prevMonth = month;
-        iso = `${defaultYear + yearOffset}-${pad2(month)}-${pad2(dayNum)}`;
+      if (dayNum !== null) {
+        let month: number;
+        if (monthByCol.size > 0) {
+          // Use the detected "X月" context.
+          month = monthByCol.get(c) ?? -1;
+        } else {
+          // No context row found — use startMonth and auto-increment when the
+          // day number wraps around (e.g., 30 → 1 means the next month started).
+          if (prevDayNum !== null && dayNum < prevDayNum) {
+            fallbackMonth = (fallbackMonth % 12) + 1;
+          }
+          month = fallbackMonth;
+          prevDayNum = dayNum;
+        }
+        if (month > 0) {
+          if (prevMonth > 0 && prevMonth > month) yearOffset++;
+          prevMonth = month;
+          iso = `${defaultYear + yearOffset}-${pad2(month)}-${pad2(dayNum)}`;
+        }
       }
     }
 
