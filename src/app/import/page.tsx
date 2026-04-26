@@ -49,7 +49,7 @@ export default function ImportPage() {
     setImportError("");
     try {
       const buf = await file.arrayBuffer();
-      const result = importPreferencesFromBuffer(buf, defaultYear);
+      const result = importPreferencesFromBuffer(buf, defaultYear, startMonth);
       setImported(result);
       autoApply(result);
     } catch (e) {
@@ -183,8 +183,10 @@ export default function ImportPage() {
               onChange={(e) => e.target.files?.[0] && onExcelFile(e.target.files[0])}
               className="text-sm"
             />
-            <label className="text-xs text-slate-500">
-              既定年:
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+            <label>
+              年:
               <input
                 type="number"
                 value={defaultYear}
@@ -192,9 +194,21 @@ export default function ImportPage() {
                 className="ml-1 w-20 rounded border border-slate-300 px-1"
               />
             </label>
+            <label>
+              開始月:
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={startMonth}
+                onChange={(e) => setStartMonth(Number(e.target.value))}
+                className="ml-1 w-14 rounded border border-slate-300 px-1"
+              />
+            </label>
+            <span className="text-slate-400">（月見出し行が検出できない場合のフォールバック）</span>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            1列目にメンバー名、ヘッダー行に日付（例: 2026-04-26 や 4/26）を含むシートを想定。
+            1列目にメンバー名、ヘッダー行に日付（例: 2026-04-26 や 4/26 や 4月）を含むシートを想定。
           </p>
           {filename && <p className="mt-2 text-xs text-slate-700">読み込み: {filename}</p>}
           {importError && <p className="mt-2 text-xs text-rose-600">{importError}</p>}
