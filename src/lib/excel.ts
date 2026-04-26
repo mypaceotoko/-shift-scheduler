@@ -153,10 +153,14 @@ export function importPreferencesFromBuffer(buf: ArrayBuffer, defaultYear: numbe
   }
   result.dates = dateColumns.map((d) => d.date);
 
+  // Known header-only row labels that appear between the date row and member rows.
+  const NON_MEMBER_LABELS = new Set(["曜日", "日", "日付", "週", "week", "day"]);
+
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     const name = String(row[0] ?? "").trim();
     if (!name) continue;
+    if (NON_MEMBER_LABELS.has(name)) continue;
     if (name.includes("出勤人数") || name.includes("合計")) break;
     const prefs: Record<string, DayPreference> = {};
     for (const { col, date } of dateColumns) {
