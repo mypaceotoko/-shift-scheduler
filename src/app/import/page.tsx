@@ -98,17 +98,19 @@ export default function ImportPage() {
       setOcrStage("OCRを実行中…");
       // Lazy-load tesseract to keep main bundle small.
       const Tesseract = (await import("tesseract.js")).default;
-      // PSM 6 = "Assume a single uniform block of text" — works well on
-      // grid-like shift sheets where Tesseract otherwise tries to detect
-      // columns and fragments names. preserve_interword_spaces keeps cells
-      // separable when Tesseract joins glyphs across whitespace.
+      // Notes on Tesseract config:
+      // - PSM (page segmentation mode) is left to the engine default (auto).
+      //   PSM 6 ("uniform block") was tested but often fused an entire row of
+      //   shift cells (e.g. ○○○○○○○) into one word whose bounding box covers
+      //   the name column too — breaking name detection downstream.
+      // - preserve_interword_spaces keeps space tokens between glyphs so that
+      //   adjacent date cells stay distinguishable in the raw text output.
       const recognizeOptions = {
         logger: (m: { status: string; progress?: number }) => {
           if (m.status === "recognizing text" && typeof m.progress === "number") {
             setOcrProgress(Math.round(m.progress * 100));
           }
         },
-        tessedit_pageseg_mode: "6",
         preserve_interword_spaces: "1",
       } as unknown as Parameters<typeof Tesseract.recognize>[2];
       const result = await Tesseract.recognize(inputImage, "jpn+eng", recognizeOptions);
