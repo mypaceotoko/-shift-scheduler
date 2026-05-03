@@ -11,6 +11,7 @@ import {
   type ImportedPreferences,
 } from "@/lib/excel";
 import { extractGridFromOcr, type OcrWord } from "@/lib/imageOcr";
+import { preprocessImageForOcr } from "@/lib/imagePreprocess";
 import type { DayPreference } from "@/lib/types";
 
 export default function ImportPage() {
@@ -25,11 +26,14 @@ export default function ImportPage() {
 
   // Image OCR state
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [processedUrl, setProcessedUrl] = useState<string | null>(null);
   const [ocrRunning, setOcrRunning] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrStage, setOcrStage] = useState<string>("");
   const [ocrText, setOcrText] = useState<string>("");
   const [ocrError, setOcrError] = useState<string>("");
   const [ocrSummary, setOcrSummary] = useState<string>("");
+  const [usePreprocess, setUsePreprocess] = useState(true);
   const objectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -62,6 +66,7 @@ export default function ImportPage() {
     const url = URL.createObjectURL(file);
     objectUrlRef.current = url;
     setImageUrl(url);
+    setProcessedUrl(null);
     setOcrText("");
     setOcrError("");
   }
@@ -70,26 +75,54 @@ export default function ImportPage() {
     if (!imageUrl) return;
     setOcrRunning(true);
     setOcrProgress(0);
+    setOcrStage(usePreprocess ? "画像を前処理中…" : "OCRを準備中…");
     setOcrError("");
     setOcrText("");
     setOcrSummary("");
     try {
+      // Step 1: optional image preprocessing (grayscale + contrast + binarization).
+      let inputImage: string = imageUrl;
+      if (usePreprocess) {
+        try {
+          inputImage = await preprocessImageForOcr(imageUrl);
+          setProcessedUrl(inputImage);
+        } catch (e) {
+          // Fall back to the raw image rather than aborting.
+          console.warn("Image preprocessing failed, falling back to raw image:", e);
+          setProcessedUrl(null);
+        }
+      } else {
+        setProcessedUrl(null);
+      }
+
+      setOcrStage("OCRを実行中…");
       // Lazy-load tesseract to keep main bundle small.
       const Tesseract = (await import("tesseract.js")).default;
-      const result = await Tesseract.recognize(imageUrl, "jpn+eng", {
-        logger: (m) => {
+      // PSM 6 = "Assume a single uniform block of text" — works well on
+      // grid-like shift sheets where Tesseract otherwise tries to detect
+      // columns and fragments names. preserve_interword_spaces keeps cells
+      // separable when Tesseract joins glyphs across whitespace.
+      const recognizeOptions = {
+        logger: (m: { status: string; progress?: number }) => {
           if (m.status === "recognizing text" && typeof m.progress === "number") {
             setOcrProgress(Math.round(m.progress * 100));
           }
         },
-      });
+        tessedit_pageseg_mode: "6",
+        preserve_interword_spaces: "1",
+      } as unknown as Parameters<typeof Tesseract.recognize>[2];
+      const result = await Tesseract.recognize(inputImage, "jpn+eng", recognizeOptions);
       setOcrText(result.data.text || "");
 
-      const words: OcrWord[] = (result.data.words ?? []).map((w) => ({
-        text: String(w.text ?? "").trim(),
-        bbox: w.bbox as { x0: number; y0: number; x1: number; y1: number },
-        confidence: w.confidence,
-      }));
+      const words: OcrWord[] = (result.data.words ?? [])
+        .map((w) => ({
+          text: String(w.text ?? "").trim(),
+          bbox: w.bbox as { x0: number; y0: number; x1: number; y1: number },
+          confidence: w.confidence,
+        }))
+        // Drop the noisiest words — they typically come from grid ruling or
+        // smudges and only confuse row/column clustering.
+        .filter((w) => w.text.length > 0 && w.confidence >= 30);
 
       const grid = extractGridFromOcr(words, {
         startYear: defaultYear,
@@ -127,6 +160,7 @@ export default function ImportPage() {
       setOcrError((e as Error).message);
     } finally {
       setOcrRunning(false);
+      setOcrStage("");
     }
   }
 
@@ -244,18 +278,28 @@ export default function ImportPage() {
               />
             </label>
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               onClick={runOcr}
               disabled={!imageUrl || ocrRunning}
               className="rounded bg-brand-500 px-3 py-1.5 text-xs text-white hover:bg-brand-600 disabled:bg-slate-300"
             >
-              {ocrRunning ? `OCR 実行中… ${ocrProgress}%` : "OCR を実行 (jpn+eng)"}
+              {ocrRunning
+                ? `${ocrStage || "OCR 実行中…"} ${ocrProgress}%`
+                : "OCR を実行 (jpn+eng)"}
             </button>
-            <p className="text-xs text-slate-500">
-              ※ 手書きの○や複雑な表は誤認識しやすいです。下表で修正してください。
-            </p>
+            <label className="flex items-center gap-1 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={usePreprocess}
+                onChange={(e) => setUsePreprocess(e.target.checked)}
+              />
+              画像を前処理（推奨）
+            </label>
           </div>
+          <p className="mt-1 text-xs text-slate-500">
+            ※ 前処理ではグレースケール化・コントラスト強調・二値化を行い、文字認識の精度を上げます。手書きの○や複雑な表は誤認識しやすいので下表で修正してください。
+          </p>
           {ocrSummary && (
             <p className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
               {ocrSummary}
@@ -269,12 +313,25 @@ export default function ImportPage() {
         <section className="mb-6 rounded-md border border-slate-200 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">プレビュー</h3>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[2fr_1fr]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl}
-              alt="希望表"
-              className="max-h-[480px] w-full rounded border border-slate-200 object-contain"
-            />
+            <div className="space-y-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imageUrl}
+                alt="希望表"
+                className="max-h-[360px] w-full rounded border border-slate-200 object-contain"
+              />
+              {processedUrl && (
+                <details className="text-xs text-slate-600">
+                  <summary className="cursor-pointer">前処理後の画像（OCRに渡される画像）</summary>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={processedUrl}
+                    alt="前処理後"
+                    className="mt-1 max-h-[360px] w-full rounded border border-slate-200 object-contain"
+                  />
+                </details>
+              )}
+            </div>
             <div className="overflow-auto">
               <h4 className="mb-1 text-xs font-semibold text-slate-600">OCR結果（生テキスト）</h4>
               <pre className="max-h-[480px] overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-tight text-slate-700">

@@ -18,44 +18,87 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+/** Normalize full-width digits/letters and common OCR look-alikes so that the
+ *  downstream regexes (shift code, time range, ...) can match consistently. */
+function normalizePreferenceCell(raw: unknown): string {
+  const s = String(raw ?? "")
+    // Full-width ASCII → half-width.
+    .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/　/g, " ")
+    // Long dashes / minus signs / katakana prolonged sound mark used as a hyphen.
+    .replace(/[‐‑‒–—―ー−ｰ]/g, "-")
+    // Tildes used for time ranges.
+    .replace(/[〜～]/g, "~")
+    // Full-width colon.
+    .replace(/[：﹕]/g, ":")
+    // Various circle glyphs.
+    .replace(/[◯〇⚪⭕◦●∘⊙◎○]/g, "○")
+    // Slash variants.
+    .replace(/[／⁄∕]/g, "/")
+    .trim();
+  return s.replace(/\s+/g, " ");
+}
+
 /** Parse a single cell value to a DayPreference.
  *  - "" => unavailable (no preference submitted - exclude from schedule)
  *  - "／" / "/" / "x" / "休" / "公休" => unavailable
- *  - "○" / "◯" / "〇" => available (eligible for assignment)
+ *  - "○" / "◯" / "〇" / OCR look-alikes => available
  *  - "T", "B", ... => fixed shift code
  *  - "13-18", "18-", "-16" => restricted custom range
  *  - anything else => uncertain (kept for review). */
 export function parseCellPreference(raw: unknown): DayPreference {
-  const text = String(raw ?? "").trim();
+  const original = String(raw ?? "").trim();
+  if (!original) return { status: "unavailable", note: "" };
+
+  const text = normalizePreferenceCell(original);
   if (!text) return { status: "unavailable", note: "" };
+
   const lower = text.toLowerCase();
-  if (text === "／" || text === "/" || lower === "x" || text === "✕" || text === "休" || text === "公休") {
-    return { status: "unavailable", note: text };
+  if (
+    text === "/" ||
+    lower === "x" ||
+    text === "✕" ||
+    text === "×" ||
+    text === "休" ||
+    text === "公休" ||
+    text === "OFF" ||
+    lower === "off"
+  ) {
+    return { status: "unavailable", note: original };
   }
-  if (text === "○" || text === "◯" || text === "〇") {
-    return { status: "available", note: text };
+  if (text === "○") {
+    return { status: "available", note: original };
   }
+  // OCR-only look-alikes for ○ when the cell is literally one character.
+  if (/^[0OQoUu]$/.test(text) || /^\(\s*\)$/.test(text)) {
+    return { status: "available", note: original };
+  }
+  // OCR-only look-alikes for ／ when the cell is literally one character.
+  if (/^[\\|1lI7]$/.test(text)) {
+    return { status: "unavailable", note: original };
+  }
+
   if (SHIFT_CODE_RE.test(text)) {
-    return { status: "fixed", shiftCode: text, note: text };
+    return { status: "fixed", shiftCode: text, note: original };
   }
   // Time range like "13-18"
   const m1 = text.match(TIME_RANGE_RE);
   if (m1) {
     const start = `${pad2(Number(m1[1]))}:${m1[2] ?? "00"}`;
     const end = `${pad2(Number(m1[3]))}:${m1[4] ?? "00"}`;
-    return { status: "restricted", customRange: { start, end }, note: text };
+    return { status: "restricted", customRange: { start, end }, note: original };
   }
   const m2 = text.match(TIME_FROM_RE);
   if (m2) {
     const start = `${pad2(Number(m2[1]))}:${m2[2] ?? "00"}`;
-    return { status: "restricted", customRange: { start, end: "23:00" }, note: text };
+    return { status: "restricted", customRange: { start, end: "23:00" }, note: original };
   }
   const m3 = text.match(TIME_UNTIL_RE);
   if (m3) {
     const end = `${pad2(Number(m3[1]))}:${m3[2] ?? "00"}`;
-    return { status: "restricted", customRange: { start: "09:00", end }, note: text };
+    return { status: "restricted", customRange: { start: "09:00", end }, note: original };
   }
-  return { status: "uncertain", note: text };
+  return { status: "uncertain", note: original };
 }
 
 // =============================================================================
