@@ -209,6 +209,58 @@ export default function ImportPage() {
     setImported(next);
   }
 
+  /** Rename a member. Preserves the row order in the byMember record so the
+   *  table doesn't reshuffle. No-op when the new name is empty or duplicated. */
+  function renameMember(oldName: string, rawNew: string) {
+    if (!imported) return;
+    const newName = rawNew.trim();
+    if (!newName || newName === oldName) return;
+    if (imported.byMember[newName]) {
+      alert(`メンバー名「${newName}」は既に存在します。`);
+      return;
+    }
+    const nextByMember: Record<string, Record<string, DayPreference>> = {};
+    for (const [n, prefs] of Object.entries(imported.byMember)) {
+      nextByMember[n === oldName ? newName : n] = prefs;
+    }
+    setImported({
+      ...imported,
+      byMember: nextByMember,
+      uncertain: imported.uncertain.map((u) =>
+        u.member === oldName ? { ...u, member: newName } : u,
+      ),
+    });
+  }
+
+  function removeMember(name: string) {
+    if (!imported) return;
+    if (!confirm(`「${name}」を読み取り結果から削除しますか？\n（既にメンバー画面に反映済みの場合は、メンバー画面から別途削除してください）`)) return;
+    const nextByMember = { ...imported.byMember };
+    delete nextByMember[name];
+    setImported({
+      ...imported,
+      byMember: nextByMember,
+      uncertain: imported.uncertain.filter((u) => u.member !== name),
+    });
+  }
+
+  function addMember() {
+    if (!imported) return;
+    let name = "新メンバー";
+    let i = 2;
+    while (imported.byMember[name]) {
+      name = `新メンバー${i++}`;
+    }
+    const blankPrefs: Record<string, DayPreference> = {};
+    for (const d of imported.dates) {
+      blankPrefs[d] = { status: "unavailable", note: "" };
+    }
+    setImported({
+      ...imported,
+      byMember: { ...imported.byMember, [name]: blankPrefs },
+    });
+  }
+
   return (
     <div>
       <PageHeader
@@ -400,6 +452,34 @@ export default function ImportPage() {
             </ul>
           )}
 
+          <p className="mb-2 text-xs text-slate-500">
+            メンバー名・セル内容はそのままクリックして編集できます（フォーカスを外すと確定）。
+            行頭の <span className="text-rose-500">×</span> で行削除、表下の「+ メンバー追加」で行追加。
+          </p>
+
+          <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-50" />
+              出勤可 (○)
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-blue-300 bg-blue-50" />
+              固定シフト
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-indigo-300 bg-indigo-50" />
+              時間帯指定
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-amber-300 bg-amber-100" />
+              要確認
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded border border-slate-200 bg-white" />
+              不可・未提出
+            </span>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="border-collapse text-xs">
               <thead className="bg-slate-50">
@@ -413,19 +493,41 @@ export default function ImportPage() {
               <tbody>
                 {Object.entries(imported.byMember).map(([name, prefs]) => (
                   <tr key={name}>
-                    <td className="cell-base sticky left-0 bg-white text-left pl-2 font-medium">
-                      {name}
+                    <td className="cell-base sticky left-0 bg-white text-left pl-1">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => removeMember(name)}
+                          title="この行を削除"
+                          aria-label={`${name} を削除`}
+                          className="rounded px-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+                        >
+                          ×
+                        </button>
+                        <input
+                          key={`name-${name}`}
+                          defaultValue={name}
+                          onBlur={(e) => renameMember(name, e.target.value)}
+                          className="w-24 rounded border border-transparent bg-transparent px-1 font-medium outline-none focus:border-slate-300 focus:bg-white"
+                        />
+                      </div>
                     </td>
                     {imported.dates.map((d) => {
                       const p = prefs[d];
+                      const bg =
+                        p?.status === "available"
+                          ? "bg-emerald-50"
+                          : p?.status === "fixed"
+                            ? "bg-blue-50"
+                            : p?.status === "restricted"
+                              ? "bg-indigo-50"
+                              : p?.status === "uncertain"
+                                ? "bg-amber-100"
+                                : "";
                       return (
-                        <td
-                          key={d}
-                          className={`cell-base p-0 ${
-                            p?.status === "uncertain" ? "bg-amber-100" : ""
-                          }`}
-                        >
+                        <td key={d} className={`cell-base p-0 ${bg}`}>
                           <input
+                            key={`${name}-${d}`}
                             defaultValue={p?.note ?? ""}
                             onBlur={(e) => updateCell(name, d, e.target.value)}
                             className="h-full w-full bg-transparent text-center text-xs outline-none"
@@ -437,6 +539,16 @@ export default function ImportPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={addMember}
+              className="rounded border border-dashed border-slate-300 px-3 py-1 text-xs text-slate-600 hover:border-slate-400 hover:bg-slate-50"
+            >
+              + メンバー追加
+            </button>
           </div>
         </section>
       )}
