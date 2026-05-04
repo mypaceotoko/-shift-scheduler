@@ -18,6 +18,12 @@ export interface GenerateInput {
   dayConfigs?: DayConfig[];
   /** Existing schedule to preserve manually-edited assignments. */
   existing?: Schedule | null;
+  /** When true, treat cells with no preference (empty or OCR/Excel produced
+   *  status="unavailable" with no explicit ／/x/休/OFF marker) as "available".
+   *  This is useful when the input is partial (handwritten / blurry photo /
+   *  small staff sheet) so the generator can still fill in shifts instead of
+   *  producing an empty schedule. Explicit ／/x/休 cells stay unavailable. */
+  treatBlankAsAvailable?: boolean;
 }
 
 export interface GenerateResult {
@@ -203,6 +209,7 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         weeklyByMember,
         consecutiveByMember,
         lastDateByMember,
+        treatBlankAsAvailable: input.treatBlankAsAvailable === true,
       });
       if (candidates.length === 0) break;
       candidates.sort((a, b) => b.weight - a.weight);
@@ -298,15 +305,28 @@ function collectCandidates(args: {
   weeklyByMember: Map<string, Map<string, number>>;
   consecutiveByMember: Map<string, number>;
   lastDateByMember: Map<string, string>;
+  treatBlankAsAvailable: boolean;
 }): CandidateInfo[] {
   const out: CandidateInfo[] = [];
   for (const m of args.members) {
     if (args.assignedMemberIds.has(m.id)) continue;
     const pref = m.preferences[args.day.date];
-    // Strict: only members who explicitly marked "available" (○) are eligible
-    // for greedy fill. Empty cells / unavailable / uncertain are excluded.
-    // Fixed and restricted preferences are handled in step 1, not here.
-    if (!pref || pref.status !== "available") continue;
+    // Eligibility:
+    // - explicit ○ ("available") is always eligible
+    // - fixed/restricted are handled earlier (step 1); skip them here
+    // - in relaxed mode, treat missing/blank-unavailable cells as eligible too
+    //   so partial OCR/Excel input still yields a usable schedule. Cells that
+    //   the user explicitly marked unavailable (note: "／","x","休","公休","OFF")
+    //   stay excluded.
+    let eligible = pref?.status === "available";
+    if (!eligible && args.treatBlankAsAvailable) {
+      const note = (pref?.note ?? "").trim();
+      const explicitlyOff = /^(?:\/|／|x|X|×|✕|休|公休|OFF|off)$/.test(note);
+      if (!pref) eligible = true;
+      else if (pref.status === "unavailable" && !explicitlyOff) eligible = true;
+      else if (pref.status === "uncertain") eligible = true;
+    }
+    if (!eligible) continue;
 
     // Determine candidate shift codes for this member.
     const allowed = candidateShiftCodes(m, args.shiftTypes);
