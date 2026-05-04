@@ -354,6 +354,9 @@ export default function ImportPage() {
         <p className="mt-2 text-xs text-slate-500">
           指定期間にあてはまる希望だけが取り込まれます。範囲外のセルは取り込まず、件数は下の確認パネルに表示されます。
         </p>
+        <p className="mt-1 text-xs text-emerald-700">
+          ヒント: 期間を指定しておくと、Excelに月・年が無くても自動で正しい月・年に揃えて読み取ります（日付ずれを防止）。
+        </p>
       </section>
 
       <section className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
