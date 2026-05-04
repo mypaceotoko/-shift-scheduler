@@ -396,32 +396,47 @@ interface Extraction {
   uncertainCount: number;
   parsedCount: number;
   warnings: string[];
+  /** 0..1, 1 = perfect weekday-row agreement (or no weekday row to check). */
+  weekdayAgree?: number;
 }
 
 /** Score an extraction: more members and dates is better; many uncertain cells
- *  drag the score down; we also reward "filled" cells so a strategy that picks
- *  up actual values beats a sparse one. */
-function scoreExtraction(e: Extraction): number {
+ *  drag the score down; weekday-row agreement and in-range date coverage
+ *  reward interpretations that "look right" in the user-specified window. */
+function scoreExtraction(
+  e: Extraction,
+  rangeStart?: string,
+  rangeEnd?: string,
+): number {
   const filled = e.records.filter(
     (r) => r.wishValue && r.wishValue !== "unavailable",
   ).length;
+  const weekdayBonus = ((e.weekdayAgree ?? 1) - 0.5) * 20; // -10..+10
+  let inRange = 0;
+  if (rangeStart && rangeEnd) {
+    inRange = e.dates.filter((d) => d >= rangeStart && d <= rangeEnd).length;
+  }
   return (
     e.members.length * 4 +
     e.dates.length * 2 +
     filled * 1 -
-    e.uncertainCount * 0.5
+    e.uncertainCount * 0.5 +
+    weekdayBonus +
+    inRange * 3
   );
 }
 
 /** Build a date column map for a candidate header row, optionally using a
  *  preceding "X月" context row to disambiguate bare day numbers. Returns null
- *  when fewer than 3 dates resolve. */
+ *  when fewer than 2 dates resolve. */
 function buildDateColumns(
   rows: unknown[][],
   headerRowIdx: number,
   monthByCol: Map<number, number>,
   defaultYear: number,
   startMonth: number,
+  rangeStart?: string,
+  rangeEnd?: string,
 ): DateColumn[] | null {
   const header = rows[headerRowIdx];
   if (!header) return null;
@@ -455,7 +470,75 @@ function buildDateColumns(
     }
     if (iso) out.push({ col: c, date: iso });
   }
-  return out.length >= 3 ? out : null;
+  if (out.length < 2) return null;
+
+  // Range-aware fix: if the user gave a [rangeStart, rangeEnd] window and our
+  // resolved dates fall completely outside that window but the day-of-month
+  // pattern fits, shift the year/month so the dates land inside the window.
+  // This is the single biggest cause of "imported but wrong month/year".
+  if (rangeStart && rangeEnd && out.length > 0) {
+    const inRange = out.filter((d) => d.date >= rangeStart && d.date <= rangeEnd).length;
+    if (inRange === 0) {
+      const aligned = realignToRange(out, rangeStart, rangeEnd);
+      if (aligned) return aligned;
+    }
+  }
+  return out;
+}
+
+/** Try to realign a sequence of dates so that the day-of-month progression
+ *  lands inside [lo, hi]. We keep the day numbers as-is and try every (year,
+ *  month) shift in a small neighborhood around the requested range, picking
+ *  the shift that maximises in-range coverage and contiguous-day continuity. */
+function realignToRange(
+  dates: DateColumn[],
+  lo: string,
+  hi: string,
+): DateColumn[] | null {
+  const dayNums = dates.map((d) => Number(d.date.slice(8)));
+  const months = dates.map((d) => Number(d.date.slice(5, 7)));
+  // Detect month transitions (e.g. 30,31,1,2 means month rolls over).
+  const monthBreaks: number[] = [];
+  for (let i = 1; i < dayNums.length; i++) {
+    if (dayNums[i] < dayNums[i - 1] - 5) monthBreaks.push(i);
+  }
+  // Candidate base (year, month) values: every (y, m) within ±1 year of [lo,hi].
+  const loY = Number(lo.slice(0, 4));
+  const loM = Number(lo.slice(5, 7));
+  const candidates: { y: number; m: number }[] = [];
+  for (let yy = loY - 1; yy <= loY + 1; yy++) {
+    for (let mm = 1; mm <= 12; mm++) candidates.push({ y: yy, m: mm });
+  }
+  let best: DateColumn[] | null = null;
+  let bestScore = -1;
+  for (const { y, m } of candidates) {
+    const adjusted: DateColumn[] = [];
+    let curY = y;
+    let curM = m;
+    for (let i = 0; i < dates.length; i++) {
+      if (monthBreaks.includes(i)) {
+        curM++;
+        if (curM > 12) {
+          curM = 1;
+          curY++;
+        }
+      }
+      // If the original month sequence is uniform, keep curY/curM constant for
+      // the whole sequence; otherwise honor the detected month-transition.
+      const finalM = months[0] === months[months.length - 1] ? curM : curM;
+      adjusted.push({
+        col: dates[i].col,
+        date: `${curY}-${pad2(finalM)}-${pad2(dayNums[i])}`,
+      });
+    }
+    const score = adjusted.filter((d) => d.date >= lo && d.date <= hi).length;
+    if (score > bestScore) {
+      bestScore = score;
+      best = adjusted;
+    }
+  }
+  // Only use the realigned result if it beats the original (>0 in-range).
+  return bestScore > 0 ? best : null;
 }
 
 /** Look in the rows preceding `headerRowIdx` (within `lookback` rows) for a
@@ -482,15 +565,26 @@ function detectMonthContext(
   return out;
 }
 
-/** Find the column most likely to contain member names: walk every column and
- *  count how many cells below `headerRowIdx` look like names. Pick the leftmost
- *  column that crosses a minimum threshold and isn't a date column. */
+/** Find the column most likely to contain member names. Order:
+ *   1. Column whose header cell is a known label ("名前"/"氏名"/"メンバー").
+ *   2. Column with the highest count of name-shaped cells below the header.
+ *   3. Last-resort: the leftmost non-date column that has any non-empty cells.
+ *  Date columns are always excluded. */
 function findNameColumn(
   rows: unknown[][],
   headerRowIdx: number,
   dateCols: Set<number>,
 ): number | null {
   const maxCol = rows.reduce((m, r) => Math.max(m, r?.length ?? 0), 0);
+  const NAME_HEADER_HINTS = ["名前", "氏名", "メンバー", "スタッフ", "name", "member", "staff"];
+  // Tier 1: header label match.
+  const headerRow = rows[headerRowIdx] ?? [];
+  for (let c = 0; c < headerRow.length; c++) {
+    if (dateCols.has(c)) continue;
+    const s = String(headerRow[c] ?? "").trim().toLowerCase();
+    if (NAME_HEADER_HINTS.some((h) => s === h || s === h.toLowerCase())) return c;
+  }
+  // Tier 2: density of name-like cells.
   let best = -1;
   let bestCount = 0;
   for (let c = 0; c < maxCol; c++) {
@@ -507,7 +601,51 @@ function findNameColumn(
       best = c;
     }
   }
-  return bestCount >= 1 ? best : null;
+  if (bestCount >= 1) return best;
+  // Tier 3: leftmost non-date column with any non-empty cell below the header.
+  for (let c = 0; c < maxCol; c++) {
+    if (dateCols.has(c)) continue;
+    for (let r = headerRowIdx + 1; r < rows.length; r++) {
+      const v = rows[r]?.[c];
+      if (v != null && String(v).trim() !== "") return c;
+    }
+  }
+  return null;
+}
+
+/** Look downward from `headerRowIdx` for a row whose date columns contain
+ *  weekday markers ("月","火","水","木","金","土","日") that align with the
+ *  computed dates. Returns the proportion of agreeing columns (0..1) or 1 if
+ *  no weekday row was found at all. Useful as a sanity check for the chosen
+ *  year/month inference. */
+function weekdayRowAgreement(
+  rows: unknown[][],
+  headerRowIdx: number,
+  dateCols: DateColumn[],
+): number {
+  const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"];
+  for (let r = headerRowIdx; r < Math.min(rows.length, headerRowIdx + 4); r++) {
+    const row = rows[r] ?? [];
+    let weekdayCells = 0;
+    for (const { col } of dateCols) {
+      const s = normalizeCellText(row[col]).replace(/\([^)]*\)/g, "").trim();
+      if (WEEKDAY_JA.includes(s)) weekdayCells++;
+    }
+    if (weekdayCells >= Math.min(3, dateCols.length)) {
+      // Found a weekday row — check agreement.
+      let agree = 0;
+      let checked = 0;
+      for (const { col, date } of dateCols) {
+        const s = normalizeCellText(row[col]).replace(/\([^)]*\)/g, "").trim();
+        if (!WEEKDAY_JA.includes(s)) continue;
+        checked++;
+        const expected = WEEKDAY_JA[new Date(date).getDay()];
+        if (s === expected) agree++;
+      }
+      return checked > 0 ? agree / checked : 1;
+    }
+  }
+  return 1; // no weekday row found — neutral
 }
 
 function colLetter(col: number): string {
@@ -534,11 +672,16 @@ function extractWithHeader(
     monthByCol,
     options.defaultYear,
     options.startMonth ?? 1,
+    options.rangeStart,
+    options.rangeEnd,
   );
   if (!dateCols) return null;
   const dateColSet = new Set(dateCols.map((d) => d.col));
   const nameCol = findNameColumn(rows, headerRowIdx, dateColSet);
   if (nameCol == null) return null;
+  // Weekday-row sanity check — if we have one and it disagrees badly with the
+  // computed dates, the strategy probably picked the wrong year/month.
+  const weekdayAgree = weekdayRowAgreement(rows, headerRowIdx, dateCols);
 
   const records: PreferenceRecord[] = [];
   const memberOrder: string[] = [];
@@ -582,6 +725,12 @@ function extractWithHeader(
     }
   }
 
+  if (weekdayAgree < 0.5) {
+    warnings.push(
+      `曜日行と日付の一致率が低いです (${Math.round(weekdayAgree * 100)}%)。` +
+        `年・月の指定が違っている可能性があります。`,
+    );
+  }
   return {
     strategy,
     members: memberOrder,
@@ -590,6 +739,7 @@ function extractWithHeader(
     uncertainCount: uncertain,
     parsedCount: parsed,
     warnings,
+    weekdayAgree,
   };
 }
 
@@ -597,7 +747,7 @@ function extractWithHeader(
 // Strategies A/B/C: enumerate header-row candidates
 // ---------------------------------------------------------------------------
 
-/** Strategy A: any row whose cells (excluding column 0) yield ≥3 ISO dates
+/** Strategy A: any row whose cells (excluding column 0) yield ≥2 ISO dates
  *  via headerToISO. This is the fastest, most-confident detector. */
 function strategyA_explicitDates(
   rows: unknown[][],
@@ -611,7 +761,7 @@ function strategyA_explicitDates(
     for (let c = 1; c < row.length; c++) {
       if (headerToISO(row[c], options.defaultYear)) hits++;
     }
-    if (hits >= 3) {
+    if (hits >= 2) {
       const ex = extractWithHeader(rows, sheetName, r, options, "A:explicit-dates");
       if (ex) out.push(ex);
     }
@@ -620,23 +770,41 @@ function strategyA_explicitDates(
 }
 
 /** Strategy B: rows of bare day-numbers (1..31). Useful for templates where
- *  the date row only has "1 2 3 …". Requires either (i) a "X月" context row
- *  above or (ii) startMonth fallback. */
+ *  the date row only has "1 2 3 …". When the user supplied a date range we
+ *  also try alternate startMonth values around it so the year/month inference
+ *  doesn't drift just because the user typed the wrong "開始月". */
 function strategyB_dayNumbers(
   rows: unknown[][],
   sheetName: string,
   options: ImportOptions,
 ): Extraction[] {
   const out: Extraction[] = [];
+  // Build the list of startMonth values to try. If the user gave a range we
+  // prefer the month implied by rangeStart; otherwise fall back to whatever
+  // they typed in the form (or 1).
+  const tryMonths: number[] = [];
+  if (options.rangeStart) tryMonths.push(Number(options.rangeStart.slice(5, 7)));
+  if (options.startMonth && !tryMonths.includes(options.startMonth)) {
+    tryMonths.push(options.startMonth);
+  }
+  for (const m of [1, 4, 5, 6, 7, 10]) if (!tryMonths.includes(m)) tryMonths.push(m);
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] ?? [];
     let hits = 0;
     for (let c = 1; c < row.length; c++) {
       if (extractDayNumber(row[c]) !== null) hits++;
     }
-    if (hits >= 5) {
-      const ex = extractWithHeader(rows, sheetName, r, options, "B:day-numbers");
-      if (ex) out.push(ex);
+    if (hits >= 3) {
+      for (const sm of tryMonths) {
+        const ex = extractWithHeader(
+          rows,
+          sheetName,
+          r,
+          { ...options, startMonth: sm },
+          `B:day-numbers(sm=${sm})`,
+        );
+        if (ex) out.push(ex);
+      }
     }
   }
   return out;
@@ -663,7 +831,7 @@ function strategyC_density(
       bestRow = r;
     }
   }
-  if (bestRow < 0 || bestHits < 3) return [];
+  if (bestRow < 0 || bestHits < 2) return [];
   const ex = extractWithHeader(rows, sheetName, bestRow, options, "C:density");
   return ex ? [ex] : [];
 }
@@ -749,6 +917,16 @@ export function parseWorkbook(
     return result;
   }
 
+  // Range-aware inference: when the user told us "I want 2026-05-01..05-31",
+  // we override defaultYear and startMonth so day-number-only headers land in
+  // the right month. This is the single biggest source of "imported but the
+  // dates are wrong by a year/month".
+  const effective: ImportOptions = { ...options };
+  if (options.rangeStart) {
+    effective.defaultYear = Number(options.rangeStart.slice(0, 4));
+    effective.startMonth = Number(options.rangeStart.slice(5, 7));
+  }
+
   type Candidate = { extraction: Extraction; sheet: string; score: number };
   const candidates: Candidate[] = [];
   const sheetHints: { sheet: string; hint: number }[] = [];
@@ -772,13 +950,13 @@ export function parseWorkbook(
     sheetHints.push({ sheet: sheetName, hint: sheetLikenessHint(rows) });
 
     const extractions: Extraction[] = [
-      ...strategyA_explicitDates(rows, sheetName, options),
-      ...strategyB_dayNumbers(rows, sheetName, options),
-      ...strategyC_density(rows, sheetName, options),
-      ...strategyD_transposed(rows, sheetName, options),
+      ...strategyA_explicitDates(rows, sheetName, effective),
+      ...strategyB_dayNumbers(rows, sheetName, effective),
+      ...strategyC_density(rows, sheetName, effective),
+      ...strategyD_transposed(rows, sheetName, effective),
     ];
     for (const ex of extractions) {
-      const score = scoreExtraction(ex);
+      const score = scoreExtraction(ex, effective.rangeStart, effective.rangeEnd);
       candidates.push({ extraction: ex, sheet: sheetName, score });
       result.diagnostics.push({
         sheet: sheetName,
@@ -794,12 +972,20 @@ export function parseWorkbook(
 
   if (candidates.length === 0) {
     if (sheetHints.length > 0) {
-      const best = sheetHints.reduce((a, b) => (a.hint >= b.hint ? a : b));
+      const ranked = [...sheetHints].sort((a, b) => b.hint - a.hint);
+      const summary = ranked
+        .slice(0, 3)
+        .map((s) => `${s.sheet}(密度=${s.hint})`)
+        .join(", ");
       result.errors.push(
-        `日付ヘッダー行を検出できませんでした（最有力候補: シート「${best.sheet}」）。ヘッダー行に「2026-04-26」「4/26」「4月」などの日付を入れてください。`,
+        `日付ヘッダー行を検出できませんでした。シート候補: ${summary}。` +
+          `ヘッダー行に「2026-04-26」「4/26」「4月」などの日付を入れるか、` +
+          `「読み込み対象期間」を正しく設定してから再解析してください。`,
       );
     } else {
-      result.errors.push("日付ヘッダー行を検出できませんでした。");
+      result.errors.push(
+        "日付ヘッダー行を検出できませんでした。シートが空、または日付セルがないようです。",
+      );
     }
     return result;
   }

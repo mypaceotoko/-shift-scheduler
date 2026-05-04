@@ -210,7 +210,17 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
     //       so the morning opening shift is first, then later full shifts in
     //       start-time order, then half shifts, then before-morning shifts
     //       last. This implements "朝はB番スタート" and "B → C → D → F" naturally.
+    //
+    //    Two-pass refill: the first pass enforces all soft constraints (week
+    //    cap, consecutive cap). If the day still falls short, the second pass
+    //    relaxes those to fill required headcount, recording a warning per
+    //    relaxed pick so the user can see exactly where rules were stretched.
+    const periodProgress =
+      dayConfigs.length > 0
+        ? dayConfigs.findIndex((d) => d.date === day.date) / dayConfigs.length
+        : 0;
     let safety = 0;
+    let relaxed = false;
     while (weight + 1e-9 < target && safety++ < 50) {
       const candidates = collectCandidates({
         day,
@@ -224,8 +234,18 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         lastDateByMember,
         treatBlankAsAvailable: input.treatBlankAsAvailable === true,
         learnedPatterns: input.learnedPatterns,
+        relaxCaps: relaxed,
+        periodProgress,
       });
-      if (candidates.length === 0) break;
+      if (candidates.length === 0) {
+        if (!relaxed) {
+          // Strict pass exhausted — try once more with caps relaxed before
+          // giving up on the day.
+          relaxed = true;
+          continue;
+        }
+        break;
+      }
       candidates.sort((a, b) => b.weight - a.weight);
       const remainingCap = target - weight;
 
@@ -270,9 +290,23 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
       };
       if (!tryFind(false)) tryFind(true);
 
-      if (!pickedMember || !chosenCode) break;
+      if (!pickedMember || !chosenCode) {
+        if (!relaxed) {
+          relaxed = true;
+          continue;
+        }
+        break;
+      }
       const cellWarnings: string[] = [];
       if (usedCodes.has(chosenCode)) cellWarnings.push(`${chosenCode}が重複（他コードで埋め切れず）`);
+      if (relaxed) {
+        cellWarnings.push("制約緩和で割当（連勤/週上限の限界に近い可能性）");
+        warnings.push({
+          date: day.date,
+          level: "info",
+          message: `${pickedMember.name} を ${chosenCode} で緩和割当（連勤・週上限が限界のため）`,
+        });
+      }
       assignments.push({
         date: day.date,
         memberId: pickedMember.id,
@@ -287,10 +321,30 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
     }
 
     if (weight + 1e-9 < target) {
+      const short = +(target - weight).toFixed(1);
       warnings.push({
         date: day.date,
-        level: "warning",
-        message: `必要人数 ${target} に対して ${weight} 名のみ割り当て`,
+        level: "error",
+        message: `必要人数 ${target} に対して ${weight} 名のみ割当（${short} 不足）。希望提出が少ない可能性があります。`,
+      });
+    }
+  }
+
+  // Post-pass fairness review: surface per-member deviation from monthly
+  // targets so the user can see where the schedule under- or over-shot.
+  for (const m of activeMembers) {
+    const target = lookupMemberTarget(settings.memberTargets, m.name);
+    if (target <= 0) continue;
+    const actual = totalsByMember.get(m.id) ?? 0;
+    const gap = target - actual;
+    if (Math.abs(gap) >= Math.max(2, target * 0.15)) {
+      warnings.push({
+        date: dates[0] ?? "",
+        level: gap > 0 ? "warning" : "info",
+        message:
+          gap > 0
+            ? `${m.name}: 月間目標 ${target} 回に対して ${actual} 回 (${gap} 回不足)`
+            : `${m.name}: 月間目標 ${target} 回に対して ${actual} 回 (${-gap} 回超過)`,
       });
     }
   }
@@ -342,6 +396,13 @@ function collectCandidates(args: {
   lastDateByMember: Map<string, string>;
   treatBlankAsAvailable: boolean;
   learnedPatterns?: LearnedPatterns;
+  /** When true, allow candidates that hit weekly / consecutive caps. Used as a
+   *  second-pass relaxation to keep required headcount filled. */
+  relaxCaps?: boolean;
+  /** 0..1, how far through the period we are. Used to ramp up the
+   *  member-target term as we approach the end so under-target members get
+   *  prioritized increasingly hard. */
+  periodProgress?: number;
 }): CandidateInfo[] {
   const out: CandidateInfo[] = [];
   for (const m of args.members) {
@@ -372,13 +433,15 @@ function collectCandidates(args: {
     const week = isoWeekKey(args.day.date);
     const weeklyCount = args.weeklyByMember.get(m.id)?.get(week) ?? 0;
     const maxWeek = m.constraints.maxPerWeek ?? args.settings.defaultMaxPerWeek;
-    if (weeklyCount >= maxWeek) continue;
+    const overWeekCap = weeklyCount >= maxWeek;
+    if (overWeekCap && !args.relaxCaps) continue;
 
     const consecutive = args.consecutiveByMember.get(m.id) ?? 0;
     const last = args.lastDateByMember.get(m.id);
     const isConsecutive = last && addDays(last, 1) === args.day.date;
     const maxConsecutive = m.constraints.maxConsecutive ?? args.settings.defaultMaxConsecutive;
-    if (isConsecutive && consecutive >= maxConsecutive) continue;
+    const overConsecutive = !!isConsecutive && consecutive >= maxConsecutive;
+    if (overConsecutive && !args.relaxCaps) continue;
 
     // Score:
     // - balanceTerm pulls down members who already have many shifts
@@ -392,8 +455,15 @@ function collectCandidates(args: {
     const priorityTerm = m.priority;
     const target = lookupMemberTarget(args.settings.memberTargets, m.name);
     const targetGap = target > 0 ? Math.max(0, target - total) : 0;
-    const targetTerm = targetGap * 3;
+    // Ramp up the target term as the period progresses: at the start of the
+    // month a small nudge is enough; near the end, under-target members get a
+    // much stronger boost so we converge to monthly goals instead of leaving
+    // a permanent gap. progress=0 → 3x, progress=1 → 8x.
+    const progress = args.periodProgress ?? 0;
+    const targetWeight = 3 + progress * 5;
+    const targetTerm = targetGap * targetWeight;
     const prefBonus = pref?.status === "available" ? 1 : 0;
+    const capPenalty = (overWeekCap ? -8 : 0) + (overConsecutive ? -8 : 0);
 
     // Soft learning bonus: count past manual on/off events on this weekday for
     // this member. On-events bias up, off-events bias down. Weight is small
@@ -405,7 +475,7 @@ function collectCandidates(args: {
     const learnedOff = args.learnedPatterns?.memberDayOff[m.id]?.[wkKey] ?? 0;
     const learningTerm = learnedOnSum * 0.4 - learnedOff * 0.6;
 
-    const weight = balanceTerm + priorityTerm + targetTerm + prefBonus + learningTerm;
+    const weight = balanceTerm + priorityTerm + targetTerm + prefBonus + learningTerm + capPenalty;
 
     // Pick best shift for this member - first in the (re-ordered) allowed list.
     out.push({

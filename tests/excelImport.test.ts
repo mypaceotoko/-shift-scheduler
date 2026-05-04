@@ -300,3 +300,104 @@ test("M/D(曜) header format is recognized", () => {
   const r = parseWorkbook(buf, { defaultYear: 2026 });
   assert.deepEqual(r.dates, ["2026-05-01", "2026-05-02", "2026-05-03"]);
 });
+
+// ---------------------------------------------------------------------------
+// 15. Range-driven year/month inference — when bare day numbers are paired
+//     with a [rangeStart, rangeEnd] window, the parser must place the dates
+//     inside that window even if no year/month is mentioned in the sheet.
+// ---------------------------------------------------------------------------
+
+test("date range overrides defaultYear/startMonth so dates land inside the window", () => {
+  const buf = makeWorkbook([
+    ["名前", 1, 2, 3, 4, 5],
+    ["山田", "○", "○", "/", "○", "○"],
+  ]);
+  // The user typed a wrong defaultYear/startMonth (2024/Jan) but specified a
+  // 2026-05 range — the range should win.
+  const r = parseWorkbook(buf, {
+    defaultYear: 2024,
+    startMonth: 1,
+    rangeStart: "2026-05-01",
+    rangeEnd: "2026-05-31",
+  });
+  assert.equal(r.errors.length, 0);
+  assert.deepEqual(r.dates.slice(0, 3), ["2026-05-01", "2026-05-02", "2026-05-03"]);
+});
+
+// ---------------------------------------------------------------------------
+// 16. Lowered ≥2 threshold: half-month tables with only a few date columns
+// ---------------------------------------------------------------------------
+
+test("small tables with only 2 dates are still parsed", () => {
+  const buf = makeWorkbook([
+    ["名前", "2026-05-01", "2026-05-02"],
+    ["山田", "○", "/"],
+  ]);
+  const r = parseWorkbook(buf, { defaultYear: 2026 });
+  assert.equal(r.dates.length, 2);
+  assert.equal(r.members.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 17. Name column with NO header label — picked by density of name cells
+// ---------------------------------------------------------------------------
+
+test("name column without a header label is detected by density fallback", () => {
+  const buf = makeWorkbook([
+    ["", "2026-05-01", "2026-05-02", "2026-05-03"],
+    ["山田", "○", "○", "/"],
+    ["佐藤", "○", "/", "○"],
+    ["田中", "/", "○", "○"],
+  ]);
+  const r = parseWorkbook(buf, { defaultYear: 2026 });
+  assert.equal(r.members.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// 18. Weekday validation — a sheet with 2025 dates but a 2026 range produces
+//     warnings (weekday agreement should drop)
+// ---------------------------------------------------------------------------
+
+test("weekday-row mismatch when wrong year is implied is detected via warnings", () => {
+  // Day numbers 1..3 of May. Weekday row says 月/火/水 — that matches 2027.
+  // With rangeStart 2026-05-01 (which is Friday), the range realignment
+  // should keep us on 2026 and a warning should be raised.
+  const buf = makeWorkbook([
+    ["", "5月", "", "", ""],
+    ["名前", 1, 2, 3, 4],
+    ["曜日", "土", "日", "月", "火"],
+    ["山田", "○", "○", "/", "○"],
+  ]);
+  const r = parseWorkbook(buf, {
+    defaultYear: 2026,
+    startMonth: 5,
+    rangeStart: "2026-05-01",
+    rangeEnd: "2026-05-31",
+  });
+  assert.deepEqual(r.dates.slice(0, 4), [
+    "2026-05-01",
+    "2026-05-02",
+    "2026-05-03",
+    "2026-05-04",
+  ]);
+  // 2026-05-01 is a Friday, but the sheet says Saturday → low agreement.
+  assert.ok(r.warnings.some((w) => w.includes("曜日")), "should warn about weekday mismatch");
+});
+
+// ---------------------------------------------------------------------------
+// 19. 3-row template (日 / 曜日 / イベント) — common Japanese shift sheet
+// ---------------------------------------------------------------------------
+
+test("3-row Japanese template (日/曜日/イベント + members) is parsed", () => {
+  const buf = makeWorkbook([
+    ["", "5月", "", "", ""],
+    ["日", 1, 2, 3, 4],
+    ["曜日", "金", "土", "日", "月"],
+    ["イベント", "", "", "祝", ""],
+    ["山田", "○", "○", "/", "○"],
+    ["佐藤", "B", "○", "○", "/"],
+  ]);
+  const r = parseWorkbook(buf, { defaultYear: 2026, startMonth: 5 });
+  assert.deepEqual(r.dates, ["2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04"]);
+  assert.deepEqual(r.members, ["山田", "佐藤"]);
+});
