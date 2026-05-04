@@ -9,10 +9,19 @@ import { rangeISO } from "@/lib/dateUtils";
 
 export default function GeneratePage() {
   const { members, shiftTypes, settings, schedule, setSchedule } = useAppStore();
-  const [startDate, setStartDate] = useState(schedule?.startDate ?? "2026-04-26");
-  const [endDate, setEndDate] = useState(schedule?.endDate ?? "2026-05-10");
+  // Pick a sensible default period. Priority:
+  // 1. existing schedule's period (user already configured it)
+  // 2. the span of imported member preferences (matches OCR/Excel input)
+  // 3. hard-coded fallback (shouldn't normally hit)
+  const prefDates = members.flatMap((m) => Object.keys(m.preferences ?? {})).sort();
+  const fallbackStart = prefDates[0] ?? "2026-04-26";
+  const fallbackEnd = prefDates[prefDates.length - 1] ?? "2026-05-10";
+  const [startDate, setStartDate] = useState(schedule?.startDate ?? fallbackStart);
+  const [endDate, setEndDate] = useState(schedule?.endDate ?? fallbackEnd);
   const [warnings, setWarnings] = useState<GenerateWarning[]>([]);
   const [keepManual, setKeepManual] = useState(true);
+  const [treatBlankAsAvailable, setTreatBlankAsAvailable] = useState(true);
+  const [lastAssigned, setLastAssigned] = useState<number | null>(null);
 
   function run() {
     const result = generateSchedule({
@@ -23,12 +32,29 @@ export default function GeneratePage() {
       settings,
       dayConfigs: schedule?.dayConfigs?.filter((d) => d.date >= startDate && d.date <= endDate),
       existing: keepManual ? schedule : null,
+      treatBlankAsAvailable,
     });
     setSchedule(result.schedule);
     setWarnings(result.warnings);
+    setLastAssigned(result.schedule.assignments.length);
   }
 
   const days = rangeISO(startDate, endDate);
+
+  // Diagnostic: how many member-days inside the requested period have an
+  // "available" / fixed / restricted preference? Helps users notice when the
+  // OCR-imported preferences fall on a different month.
+  const overlapCount = members.reduce((acc, m) => {
+    let c = 0;
+    for (const d of days) {
+      const p = m.preferences?.[d];
+      if (p?.status === "available" || p?.status === "fixed" || p?.status === "restricted") c++;
+    }
+    return acc + c;
+  }, 0);
+  const importedDateRange = prefDates.length > 0
+    ? `${prefDates[0]} 〜 ${prefDates[prefDates.length - 1]}`
+    : null;
 
   return (
     <div>
@@ -66,8 +92,38 @@ export default function GeneratePage() {
             />
             手動編集を維持して再計算
           </label>
+          <label className="mt-1 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={treatBlankAsAvailable}
+              onChange={(e) => setTreatBlankAsAvailable(e.target.checked)}
+            />
+            <span>
+              空欄も候補にする
+              <span className="ml-1 text-xs text-slate-500">（／・休 など明示の不可は除外）</span>
+            </span>
+          </label>
         </Field>
       </section>
+
+      {members.length > 0 && overlapCount === 0 && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <p className="font-medium">この期間に「希望」が0件です。</p>
+          <p className="mt-1 text-xs">
+            メンバーは {members.length} 名いますが、{startDate}〜{endDate} の範囲で
+            「○ / 固定 / 時間帯」希望が見つかりません。
+            {importedDateRange && (
+              <>
+                <br />
+                取り込まれた希望表の日付範囲: <strong>{importedDateRange}</strong>
+                — 期間が一致しているか確認してください。
+              </>
+            )}
+            <br />
+            「空欄も候補にする」をONにすれば、明示的に休のセル以外は出勤可とみなして埋めます。
+          </p>
+        </div>
+      )}
 
       {members.length === 0 ? (
         <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -119,6 +175,11 @@ export default function GeneratePage() {
           <p className="text-sm">
             生成済み: {schedule.assignments.length} 件 / 期間 {schedule.startDate} - {schedule.endDate}
           </p>
+          {lastAssigned === 0 && (
+            <p className="mt-1 text-xs text-rose-600">
+              0件しか入りませんでした。期間や希望表の日付、上の「空欄も候補にする」設定を見直してください。
+            </p>
+          )}
           <p className="mt-1 text-xs text-slate-500">
             「シフト確認・編集」画面でカレンダー表示・調整ができます。
           </p>

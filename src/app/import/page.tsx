@@ -18,8 +18,15 @@ export default function ImportPage() {
   const router = useRouter();
   const { members, importState, schedule, shiftTypes, settings } = useAppStore();
   const [imported, setImported] = useState<ImportedPreferences | null>(null);
-  const [defaultYear, setDefaultYear] = useState<number>(new Date().getFullYear());
-  const [startMonth, setStartMonth] = useState<number>(new Date().getMonth() + 1);
+  // Default year/month from the existing schedule's startDate when present, so
+  // the OCR/Excel date detection lands on the same period the user already
+  // configured for shift generation. Otherwise fall back to today.
+  const [defaultYear, setDefaultYear] = useState<number>(() =>
+    schedule?.startDate ? Number(schedule.startDate.slice(0, 4)) : new Date().getFullYear(),
+  );
+  const [startMonth, setStartMonth] = useState<number>(() =>
+    schedule?.startDate ? Number(schedule.startDate.slice(5, 7)) : new Date().getMonth() + 1,
+  );
   const [filename, setFilename] = useState<string>("");
   const [addMissing, setAddMissing] = useState(true);
   const [importError, setImportError] = useState<string>("");
