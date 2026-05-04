@@ -1,6 +1,7 @@
 import type {
   Assignment,
   DayConfig,
+  LearnedPatterns,
   Member,
   Schedule,
   SchedulerSettings,
@@ -24,6 +25,12 @@ export interface GenerateInput {
    *  small staff sheet) so the generator can still fill in shifts instead of
    *  producing an empty schedule. Explicit ／/x/休 cells stay unavailable. */
   treatBlankAsAvailable?: boolean;
+  /** Recorded patterns from past manual edits. Used as a soft tie-breaker:
+   *  members get a small score bonus on weekdays they've been manually placed
+   *  on, and code selection prefers codes that have been hand-set before for
+   *  that (member, weekday). Explicit settings (priority, target, morning
+   *  shift) still dominate. */
+  learnedPatterns?: LearnedPatterns;
 }
 
 export interface GenerateResult {
@@ -216,6 +223,7 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
         consecutiveByMember,
         lastDateByMember,
         treatBlankAsAvailable: input.treatBlankAsAvailable === true,
+        learnedPatterns: input.learnedPatterns,
       });
       if (candidates.length === 0) break;
       candidates.sort((a, b) => b.weight - a.weight);
@@ -234,9 +242,20 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
 
       // Two-pass selection: prefer (member, unused code) first; only fall back
       // to a duplicate code when no unique pairing fits remaining capacity.
+      const weekdayKey = String(new Date(day.date).getDay());
       const tryFind = (allowDuplicate: boolean) => {
         for (const c of candidates) {
-          const allowed = candidateShiftCodes(c.member, shiftTypes, settings);
+          const baseAllowed = candidateShiftCodes(c.member, shiftTypes, settings);
+          // Reorder this member's codes by learned-pattern frequency for the
+          // current weekday. Codes the user has historically picked for this
+          // (member, weekday) bubble to the top while preserving the original
+          // chronological order as a tiebreaker.
+          const learnedForCell =
+            input.learnedPatterns?.memberDayCode[c.member.id]?.[weekdayKey] ?? {};
+          const allowed = baseAllowed
+            .map((code, idx) => ({ code, idx, learned: learnedForCell[code] ?? 0 }))
+            .sort((a, b) => (b.learned - a.learned) || (a.idx - b.idx))
+            .map((x) => x.code);
           for (const code of allowed) {
             if (!allowDuplicate && usedCodes.has(code)) continue;
             const s = shiftTypes.find((t) => t.code === code);
@@ -322,6 +341,7 @@ function collectCandidates(args: {
   consecutiveByMember: Map<string, number>;
   lastDateByMember: Map<string, string>;
   treatBlankAsAvailable: boolean;
+  learnedPatterns?: LearnedPatterns;
 }): CandidateInfo[] {
   const out: CandidateInfo[] = [];
   for (const m of args.members) {
@@ -374,7 +394,18 @@ function collectCandidates(args: {
     const targetGap = target > 0 ? Math.max(0, target - total) : 0;
     const targetTerm = targetGap * 3;
     const prefBonus = pref?.status === "available" ? 1 : 0;
-    const weight = balanceTerm + priorityTerm + targetTerm + prefBonus;
+
+    // Soft learning bonus: count past manual on/off events on this weekday for
+    // this member. On-events bias up, off-events bias down. Weight is small
+    // (0.4 / 0.6) to keep explicit settings dominant; learning only matters
+    // for breaking ties between otherwise-equivalent candidates.
+    const wkKey = String(new Date(args.day.date).getDay());
+    const learnedOnCounts = args.learnedPatterns?.memberDayCode[m.id]?.[wkKey] ?? {};
+    const learnedOnSum = Object.values(learnedOnCounts).reduce((a, b) => a + b, 0);
+    const learnedOff = args.learnedPatterns?.memberDayOff[m.id]?.[wkKey] ?? 0;
+    const learningTerm = learnedOnSum * 0.4 - learnedOff * 0.6;
+
+    const weight = balanceTerm + priorityTerm + targetTerm + prefBonus + learningTerm;
 
     // Pick best shift for this member - first in the (re-ordered) allowed list.
     out.push({

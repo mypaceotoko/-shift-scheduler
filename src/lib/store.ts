@@ -5,6 +5,7 @@ import { persist } from "zustand/middleware";
 import type {
   Assignment,
   DayConfig,
+  LearnedPatterns,
   Member,
   Schedule,
   SchedulerSettings,
@@ -22,6 +23,7 @@ interface AppStore {
   shiftTypes: ShiftType[];
   schedule: Schedule | null;
   settings: SchedulerSettings;
+  learnedPatterns: LearnedPatterns;
 
   // Member ops
   addMember: (m: Member) => void;
@@ -40,6 +42,9 @@ interface AppStore {
   // Settings ops
   setSettings: (s: SchedulerSettings) => void;
 
+  // Learning ops
+  clearLearnedPatterns: () => void;
+
   // Bulk ops
   loadSampleData: () => void;
   resetAll: () => void;
@@ -49,6 +54,52 @@ interface AppStore {
     schedule: Schedule | null;
     settings: SchedulerSettings;
   }) => void;
+}
+
+const EMPTY_LEARNED: LearnedPatterns = {
+  memberDayCode: {},
+  memberDayOff: {},
+  totalEvents: 0,
+};
+
+/** Returns a deep-ish clone of the patterns with one event applied. */
+function recordCodeEvent(
+  prev: LearnedPatterns,
+  memberId: string,
+  date: string,
+  code: string,
+): LearnedPatterns {
+  const weekday = String(new Date(date).getDay());
+  const next = {
+    memberDayCode: { ...prev.memberDayCode },
+    memberDayOff: { ...prev.memberDayOff },
+    totalEvents: prev.totalEvents + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  const byMember = { ...(next.memberDayCode[memberId] ?? {}) };
+  const byDay = { ...(byMember[weekday] ?? {}) };
+  byDay[code] = (byDay[code] ?? 0) + 1;
+  byMember[weekday] = byDay;
+  next.memberDayCode[memberId] = byMember;
+  return next;
+}
+
+function recordOffEvent(
+  prev: LearnedPatterns,
+  memberId: string,
+  date: string,
+): LearnedPatterns {
+  const weekday = String(new Date(date).getDay());
+  const next = {
+    memberDayCode: { ...prev.memberDayCode },
+    memberDayOff: { ...prev.memberDayOff },
+    totalEvents: prev.totalEvents + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  const byMember = { ...(next.memberDayOff[memberId] ?? {}) };
+  byMember[weekday] = (byMember[weekday] ?? 0) + 1;
+  next.memberDayOff[memberId] = byMember;
+  return next;
 }
 
 /** House rules captured from operations on 2026-05-04. The textarea on the
@@ -98,6 +149,7 @@ export const useAppStore = create<AppStore>()(
       shiftTypes: DEFAULT_SHIFT_TYPES,
       schedule: null,
       settings: DEFAULT_SETTINGS,
+      learnedPatterns: EMPTY_LEARNED,
 
       addMember: (m) => set({ members: [...get().members, m] }),
       updateMember: (id, patch) =>
@@ -117,11 +169,24 @@ export const useAppStore = create<AppStore>()(
         const next = [...sch.assignments];
         if (idx >= 0) next[idx] = a;
         else next.push(a);
-        set({ schedule: { ...sch, assignments: next } });
+
+        // Record the user's manual choice as a learned pattern. Auto-generated
+        // assignments call setSchedule (not updateAssignment) so they don't
+        // get recorded here — only true manual edits via the schedule grid.
+        let learned = get().learnedPatterns ?? EMPTY_LEARNED;
+        if (a.manuallyEdited && a.shiftCode && a.shiftCode !== "CUSTOM") {
+          learned = recordCodeEvent(learned, a.memberId, a.date, a.shiftCode);
+        }
+        set({ schedule: { ...sch, assignments: next }, learnedPatterns: learned });
       },
       removeAssignment: (date, memberId) => {
         const sch = get().schedule;
         if (!sch) return;
+        const learned = recordOffEvent(
+          get().learnedPatterns ?? EMPTY_LEARNED,
+          memberId,
+          date,
+        );
         set({
           schedule: {
             ...sch,
@@ -129,6 +194,7 @@ export const useAppStore = create<AppStore>()(
               (a) => !(a.date === date && a.memberId === memberId),
             ),
           },
+          learnedPatterns: learned,
         });
       },
       updateDayConfig: (date, patch) => {
@@ -147,6 +213,8 @@ export const useAppStore = create<AppStore>()(
       setShiftTypes: (shiftTypes) => set({ shiftTypes }),
       setSettings: (settings) => set({ settings }),
 
+      clearLearnedPatterns: () => set({ learnedPatterns: EMPTY_LEARNED }),
+
       loadSampleData: () =>
         set({
           members: SAMPLE_MEMBERS,
@@ -160,6 +228,7 @@ export const useAppStore = create<AppStore>()(
           shiftTypes: DEFAULT_SHIFT_TYPES,
           schedule: null,
           settings: DEFAULT_SETTINGS,
+          learnedPatterns: EMPTY_LEARNED,
         }),
       importState: (state) =>
         set({

@@ -138,9 +138,32 @@ export interface SchedulerSettings {
 // Persisted root state
 // =============================================================================
 
+/** Soft "memory" of how the user has manually adjusted past schedules.
+ *  Updated whenever an assignment is saved with manuallyEdited=true (cell
+ *  change in the schedule grid) or removed via the UI. Persisted to the
+ *  Zustand store along with the rest of the app state, and read by the
+ *  scheduler as a tie-breaker bonus so future auto-generations drift toward
+ *  the user's actual habits.
+ *
+ *  Counts are intentionally raw (no decay): the user can clear them via the
+ *  generate-page button when they want a fresh start. */
+export interface LearnedPatterns {
+  /** memberId → weekday (0=Sun..6=Sat) → shift code → times the user manually
+   *  set this code on this weekday. */
+  memberDayCode: Record<string, Record<string, Record<string, number>>>;
+  /** memberId → weekday → times the user removed an assignment on this
+   *  weekday (treated as "this person usually doesn't work this day"). */
+  memberDayOff: Record<string, Record<string, number>>;
+  /** ISO timestamp of last update. */
+  updatedAt?: string;
+  /** Total number of edit events recorded. */
+  totalEvents: number;
+}
+
 export interface AppState {
   members: Member[];
   shiftTypes: ShiftType[];
   schedule: Schedule | null;
   settings: SchedulerSettings;
+  learnedPatterns?: LearnedPatterns;
 }

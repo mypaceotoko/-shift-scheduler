@@ -10,7 +10,16 @@ import { rangeISO } from "@/lib/dateUtils";
 const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
 export default function GeneratePage() {
-  const { members, shiftTypes, settings, schedule, setSchedule, setSettings } = useAppStore();
+  const {
+    members,
+    shiftTypes,
+    settings,
+    schedule,
+    setSchedule,
+    setSettings,
+    learnedPatterns,
+    clearLearnedPatterns,
+  } = useAppStore();
   // Pick a sensible default period. Priority:
   // 1. existing schedule's period (user already configured it)
   // 2. the span of imported member preferences (matches OCR/Excel input)
@@ -35,6 +44,7 @@ export default function GeneratePage() {
       dayConfigs: schedule?.dayConfigs?.filter((d) => d.date >= startDate && d.date <= endDate),
       existing: keepManual ? schedule : null,
       treatBlankAsAvailable,
+      learnedPatterns,
     });
     setSchedule(result.schedule);
     setWarnings(result.warnings);
@@ -256,6 +266,55 @@ export default function GeneratePage() {
               <p className="mt-1 text-[11px] text-slate-500">
                 目安より少ないメンバーが優先的に割り当てられます。姓だけ (例: 鈴木) でも、フルネーム (鈴木 絢也) と一致します。
               </p>
+            </div>
+
+            <div className="rounded border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium text-slate-700">
+                    手動編集の学習パターン
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    シフト確認画面でセルを編集/削除すると、(メンバー × 曜日 × コード) の傾向が
+                    自動で記録され、次回の自動生成でソフトに反映されます。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("学習した手動編集パターンを全て消去します。よろしいですか？")) {
+                      clearLearnedPatterns();
+                    }
+                  }}
+                  className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                >
+                  パターンをクリア
+                </button>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600 sm:grid-cols-4">
+                <div>
+                  <span className="text-slate-500">学習イベント数</span>
+                  <div className="font-medium">{learnedPatterns?.totalEvents ?? 0} 件</div>
+                </div>
+                <div>
+                  <span className="text-slate-500">対象メンバー</span>
+                  <div className="font-medium">
+                    {Object.keys(learnedPatterns?.memberDayCode ?? {}).length} 名
+                  </div>
+                </div>
+                <div>
+                  <span className="text-slate-500">最終更新</span>
+                  <div className="font-medium">
+                    {learnedPatterns?.updatedAt
+                      ? new Date(learnedPatterns.updatedAt).toLocaleString("ja-JP")
+                      : "—"}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-slate-500">影響度</span>
+                  <div className="font-medium">弱バイアス（既存ルール優先）</div>
+                </div>
+              </div>
             </div>
           </div>
         </details>
