@@ -120,6 +120,18 @@ export interface SchedulerSettings {
   defaultMaxPerWeek: number;
   /** When true, prefer balancing total assignments across members. */
   balanceWorkload: boolean;
+  /** Free-form rules text the user wrote (店舗のハウスルール).
+   *  Stored verbatim, displayed back on the generate page; only the structured
+   *  fields below influence the scheduler. */
+  houseRules?: string;
+  /** Shift code preferred for the morning opening slot (default "B").
+   *  When set, this code is moved to the front of each member's allowed list
+   *  so the greedy fill picks it first. */
+  morningShiftCode?: string;
+  /** Per-member monthly target headcount, keyed by member name (full name or
+   *  last name only). Members below their target receive a weighting bonus
+   *  in greedy fill so they catch up to the target by the end of the period. */
+  memberTargets?: Record<string, number>;
 }
 
 // =============================================================================
