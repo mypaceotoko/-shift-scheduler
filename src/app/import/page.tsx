@@ -27,6 +27,25 @@ export default function ImportPage() {
   const [startMonth, setStartMonth] = useState<number>(() =>
     schedule?.startDate ? Number(schedule.startDate.slice(5, 7)) : new Date().getMonth() + 1,
   );
+  // Range-based filter for imported preferences. Defaults to the existing
+  // schedule's window (or the current month) so re-imports stay scoped to the
+  // period the user is actually working on.
+  const today = new Date();
+  const monthStartIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const monthEndIso = (() => {
+    const d = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const [rangeStart, setRangeStart] = useState<string>(
+    schedule?.startDate ?? monthStartIso,
+  );
+  const [rangeEnd, setRangeEnd] = useState<string>(
+    schedule?.endDate ?? monthEndIso,
+  );
+  const [useRangeFilter, setUseRangeFilter] = useState<boolean>(true);
+  // Cache the most recent file so changing the date range can re-run the
+  // parser without forcing the user to re-pick the file.
+  const [lastBuffer, setLastBuffer] = useState<ArrayBuffer | null>(null);
   const [filename, setFilename] = useState<string>("");
   const [addMissing, setAddMissing] = useState(true);
   const [importError, setImportError] = useState<string>("");
@@ -55,16 +74,36 @@ export default function ImportPage() {
     importState({ members: next, shiftTypes, schedule, settings });
   }
 
+  function runParse(buf: ArrayBuffer) {
+    const result = importPreferencesFromBuffer(buf, defaultYear, startMonth, {
+      rangeStart: useRangeFilter ? rangeStart : undefined,
+      rangeEnd: useRangeFilter ? rangeEnd : undefined,
+    });
+    setImported(result);
+    // Auto-apply only when no out-of-range exclusions happened — otherwise the
+    // user may want to confirm the window first via the review section.
+    if (!result.excludedOutOfRange) autoApply(result);
+  }
+
   async function onExcelFile(file: File) {
     setFilename(file.name);
     setImportError("");
     try {
       const buf = await file.arrayBuffer();
-      const result = importPreferencesFromBuffer(buf, defaultYear, startMonth);
-      setImported(result);
-      autoApply(result);
+      setLastBuffer(buf);
+      runParse(buf);
     } catch (e) {
       setImportError(`ファイルの読み込みに失敗しました: ${(e as Error).message}`);
+    }
+  }
+
+  function reparseWithCurrentSettings() {
+    if (!lastBuffer) return;
+    setImportError("");
+    try {
+      runParse(lastBuffer);
+    } catch (e) {
+      setImportError(`再解析に失敗しました: ${(e as Error).message}`);
     }
   }
 
@@ -268,6 +307,55 @@ export default function ImportPage() {
         description="Excelから自動取り込み、または画像をプレビュー＋OCRで読み取って下表で修正します。空欄は「未提出 = シフトに入れない」、○は「希望提出 = 出勤可」、／は「不可」と解釈します。"
       />
 
+      <section className="mb-4 rounded-md border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">読み込み対象期間</h3>
+          <label className="text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={useRangeFilter}
+              onChange={(e) => setUseRangeFilter(e.target.checked)}
+              className="mr-1"
+            />
+            この期間に絞り込む（範囲外のセルは除外）
+          </label>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
+          <label>
+            開始日:
+            <input
+              type="date"
+              value={rangeStart}
+              disabled={!useRangeFilter}
+              onChange={(e) => setRangeStart(e.target.value)}
+              className="ml-1 rounded border border-slate-300 px-1"
+            />
+          </label>
+          <label>
+            終了日:
+            <input
+              type="date"
+              value={rangeEnd}
+              disabled={!useRangeFilter}
+              onChange={(e) => setRangeEnd(e.target.value)}
+              className="ml-1 rounded border border-slate-300 px-1"
+            />
+          </label>
+          {lastBuffer && (
+            <button
+              type="button"
+              onClick={reparseWithCurrentSettings}
+              className="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              現在のファイルで再解析
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          指定期間にあてはまる希望だけが取り込まれます。範囲外のセルは取り込まず、件数は下の確認パネルに表示されます。
+        </p>
+      </section>
+
       <section className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-md border border-slate-200 bg-white p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Excel / CSV ファイル</h3>
@@ -405,6 +493,74 @@ export default function ImportPage() {
 
       {imported && (
         <section className="rounded-md border border-slate-200 bg-white p-4">
+          {/* Confirmation panel — surfaces what the parser actually understood
+              before the user commits the import. */}
+          <div className="mb-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">メンバー</div>
+              <div className="text-base font-semibold text-slate-700">
+                {Object.keys(imported.byMember).length}
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">日付</div>
+              <div className="text-base font-semibold text-slate-700">{imported.dates.length}</div>
+            </div>
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">希望(○/固定/時間帯)</div>
+              <div className="text-base font-semibold text-emerald-600">
+                {(imported.records ?? []).filter(
+                  (r) =>
+                    r.wishValue === "available" ||
+                    r.wishValue === "fixed" ||
+                    r.wishValue === "restricted",
+                ).length}
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">要確認</div>
+              <div className="text-base font-semibold text-amber-600">
+                {imported.uncertain.length}
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">範囲外で除外</div>
+              <div className="text-base font-semibold text-slate-500">
+                {imported.excludedOutOfRange ?? 0}
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 px-2 py-1">
+              <div className="text-[10px] uppercase text-slate-400">採用シート</div>
+              <div
+                className="truncate text-base font-semibold text-slate-700"
+                title={`${imported.selectedSheet ?? "-"} (${imported.selectedStrategy ?? "-"})`}
+              >
+                {imported.selectedSheet ?? "-"}
+              </div>
+            </div>
+          </div>
+
+          {/* Show a low-confidence list separately so the user can scan
+              suspicious cells without reading the whole table. */}
+          {(imported.records ?? []).some((r) => r.confidence < 0.5) && (
+            <details className="mb-3 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+              <summary className="cursor-pointer">
+                信頼度が低いセル（参考: {(imported.records ?? []).filter((r) => r.confidence < 0.5).length} 件）
+              </summary>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {(imported.records ?? [])
+                  .filter((r) => r.confidence < 0.5)
+                  .slice(0, 50)
+                  .map((r, i) => (
+                    <li key={`${r.sourceCell}-${i}`}>
+                      {r.memberName} / {r.date} / 「{r.rawCell || "(空)"}」
+                      {" "}<span className="text-slate-500">{r.sourceSheet}!{r.sourceCell}</span>
+                    </li>
+                  ))}
+              </ul>
+            </details>
+          )}
+
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="text-sm font-semibold text-slate-700">読み取り結果</p>
@@ -416,8 +572,13 @@ export default function ImportPage() {
                   </span>
                 )}
               </p>
-              {imported.dates.length > 0 && Object.keys(imported.byMember).length > 0 && (
+              {imported.dates.length > 0 && Object.keys(imported.byMember).length > 0 && imported.excludedOutOfRange === 0 && (
                 <p className="mt-1 text-xs text-emerald-600">メンバーに自動反映しました。修正後は「メンバーに反映」を再度押してください。</p>
+              )}
+              {(imported.excludedOutOfRange ?? 0) > 0 && (
+                <p className="mt-1 text-xs text-amber-600">
+                  指定期間外のセルがあります — 内容を確認してから「メンバーに反映」を押してください。
+                </p>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
