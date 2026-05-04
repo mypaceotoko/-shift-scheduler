@@ -193,10 +193,16 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
     }
 
     // 2. Greedy fill until requiredCount reached using prioritized candidates.
-    //    When the remaining capacity is fractional and only full shifts are
-    //    available, the top candidate's shift is auto-trimmed to a half slot
-    //    so that the day can be closed off at exactly the required count
-    //    (e.g. 3.5 with five full-shift requests → 3 full + 1 trimmed half).
+    //    Two house-rules applied here:
+    //    a. **Distinct shift codes per day** — if T is already assigned, the
+    //       next person should not also be T. We try unused codes first; only
+    //       fall back to a duplicate when no fresh code fits the remaining
+    //       capacity. Custom-range / "CUSTOM" assignments are exempt because
+    //       they are time-window slots, not coded shifts.
+    //    b. **Chronological progression** — `candidateShiftCodes` orders codes
+    //       so the morning opening shift is first, then later full shifts in
+    //       start-time order, then half shifts, then before-morning shifts
+    //       last. This implements "朝はB番スタート" and "B → C → D → F" naturally.
     let safety = 0;
     while (weight + 1e-9 < target && safety++ < 50) {
       const candidates = collectCandidates({
@@ -215,40 +221,50 @@ export function generateSchedule(input: GenerateInput): GenerateResult {
       candidates.sort((a, b) => b.weight - a.weight);
       const remainingCap = target - weight;
 
-      // Try fitting any candidate's preferred shift within remaining cap.
-      let pick = candidates.find((c) => {
-        const s = shiftTypes.find((t) => t.code === c.shiftCode);
-        return s && s.countAs <= remainingCap + 1e-9;
-      });
+      // Codes already used today — exclude custom-range slots.
+      const usedCodes = new Set(
+        assignments
+          .filter((a) => a.date === day.date && !a.customRange && a.shiftCode !== "CUSTOM")
+          .map((a) => a.shiftCode),
+      );
+
+      let pickedMember: Member | undefined;
       let chosenCode: string | undefined;
       let chosenWeight = 0;
-      let customRange: { start: string; end: string } | undefined;
-      let trimmedWarning: string | undefined;
 
-      if (pick) {
-        const pickedCode = pick.shiftCode;
-        chosenCode = pickedCode;
-        chosenWeight = shiftTypes.find((s) => s.code === pickedCode)!.countAs;
-      } else {
-        // No shift fits within remaining capacity — stop filling.
-        break;
-      }
+      // Two-pass selection: prefer (member, unused code) first; only fall back
+      // to a duplicate code when no unique pairing fits remaining capacity.
+      const tryFind = (allowDuplicate: boolean) => {
+        for (const c of candidates) {
+          const allowed = candidateShiftCodes(c.member, shiftTypes, settings);
+          for (const code of allowed) {
+            if (!allowDuplicate && usedCodes.has(code)) continue;
+            const s = shiftTypes.find((t) => t.code === code);
+            if (!s || s.countAs > remainingCap + 1e-9) continue;
+            pickedMember = c.member;
+            chosenCode = code;
+            chosenWeight = s.countAs;
+            return true;
+          }
+        }
+        return false;
+      };
+      if (!tryFind(false)) tryFind(true);
 
-      if (!chosenCode || !pick) break;
+      if (!pickedMember || !chosenCode) break;
       const cellWarnings: string[] = [];
-      if (pick.forced) cellWarnings.push("条件超過");
-      if (trimmedWarning) cellWarnings.push(trimmedWarning);
+      if (usedCodes.has(chosenCode)) cellWarnings.push(`${chosenCode}が重複（他コードで埋め切れず）`);
       assignments.push({
         date: day.date,
-        memberId: pick.member.id,
+        memberId: pickedMember.id,
         shiftCode: chosenCode,
-        customRange,
+        customRange: undefined,
         manuallyEdited: false,
         warnings: cellWarnings,
       });
-      assignedMemberIds.add(pick.member.id);
+      assignedMemberIds.add(pickedMember.id);
       weight += chosenWeight;
-      bumpCounters(pick.member.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
+      bumpCounters(pickedMember.id, day.date, totalsByMember, weeklyByMember, lastDateByMember, consecutiveByMember);
     }
 
     if (weight + 1e-9 < target) {
@@ -385,6 +401,22 @@ function lookupMemberTarget(
   return 0;
 }
 
+/** Return the member's allowed shift codes, ordered for greedy selection.
+ *
+ *  Order priority (lower rank = picked first):
+ *  - 0    morning opening shift (settings.morningShiftCode, e.g. "B")
+ *  - 1..n other full shifts at-or-after the morning shift, sorted by start time
+ *         (e.g. C 11:00 → D 12:00 → F 14:00)
+ *  - 200+ half shifts (countAs < 1, e.g. "A") — only used to top off 0.5
+ *         remaining capacity on 3.5-person days
+ *  - 500+ full shifts that start *before* the morning shift (e.g. S 9:30,
+ *         T 9:45) — rarely used, kept as last-resort.
+ *
+ *  This implements the house rules:
+ *  - 「朝はB番スタート」 → B is index 0 for any member trained on B
+ *  - 「B → C → D → F のチェーン」 → chronological after morning
+ *  - 「Aなし」(unless we need 0.5) → A is in the half-shift band, after fulls
+ */
 function candidateShiftCodes(
   member: Member,
   shiftTypes: ShiftType[],
@@ -392,33 +424,28 @@ function candidateShiftCodes(
 ): string[] {
   const allowed = member.constraints.allowedShifts;
   const excluded = new Set(member.constraints.excludedShifts ?? []);
-  let codes = (allowed && allowed.length > 0
+  const candidates = (allowed && allowed.length > 0
     ? allowed
     : shiftTypes.filter((s) => !s.isOff).map((s) => s.code)
   ).filter((c) => !excluded.has(c));
 
-  // Reorder so that the morning opening shift (e.g. "B") comes first when the
-  // member is allowed to work it. The greedy fill picks codes[0], so this
-  // implements the "朝はB番スタート" house rule without forcing it on members
-  // who aren't trained for B.
   const morning = settings.morningShiftCode;
-  if (morning && codes.includes(morning)) {
-    codes = [morning, ...codes.filter((c) => c !== morning)];
+  const morningShift = morning ? shiftTypes.find((s) => s.code === morning) : undefined;
+  const morningMin = morningShift ? timeToMin(morningShift.start) : 0;
+
+  function rank(code: string): number {
+    const s = shiftTypes.find((t) => t.code === code);
+    if (!s || s.isOff) return 9999;
+    if (code === morning) return 0;
+    const start = timeToMin(s.start);
+    const isHalf = s.countAs < 1;
+    const isEarlier = morningShift !== undefined && start < morningMin;
+    if (isHalf) return 200 + start; // half shifts after fulls, ordered by start
+    if (isEarlier) return 500 + start; // before-morning fulls last
+    return 1 + start; // normal full shifts: chronological after morning
   }
 
-  // Push half shifts (countAs < 1, e.g. "A") to the end. The user's rules say
-  // "Aなし" for the morning slot — but A is still useful for filling fractional
-  // capacity (3.5 person days). Keeping it last means full shifts win unless
-  // only 0.5 capacity remains.
-  const fullCodes = codes.filter((c) => {
-    const s = shiftTypes.find((t) => t.code === c);
-    return !s || s.countAs >= 1;
-  });
-  const halfCodes = codes.filter((c) => {
-    const s = shiftTypes.find((t) => t.code === c);
-    return s ? s.countAs < 1 : false;
-  });
-  return [...fullCodes, ...halfCodes];
+  return candidates.slice().sort((a, b) => rank(a) - rank(b));
 }
 
 function chooseShiftForRange(
