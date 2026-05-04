@@ -7,8 +7,10 @@ import { useAppStore } from "@/lib/store";
 import { generateSchedule, type GenerateWarning } from "@/lib/scheduler";
 import { rangeISO } from "@/lib/dateUtils";
 
+const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
 export default function GeneratePage() {
-  const { members, shiftTypes, settings, schedule, setSchedule } = useAppStore();
+  const { members, shiftTypes, settings, schedule, setSchedule, setSettings } = useAppStore();
   // Pick a sensible default period. Priority:
   // 1. existing schedule's period (user already configured it)
   // 2. the span of imported member preferences (matches OCR/Excel input)
@@ -56,12 +58,208 @@ export default function GeneratePage() {
     ? `${prefDates[0]} 〜 ${prefDates[prefDates.length - 1]}`
     : null;
 
+  // Rules editor: edits update settings on blur. All fields persist via the
+  // Zustand `persist` middleware, so changes carry over to next sessions and
+  // future generations.
+  function patchSettings(patch: Partial<typeof settings>) {
+    setSettings({ ...settings, ...patch });
+  }
+
+  function setWeekdayCount(weekday: number, count: number) {
+    const next = settings.requiredByWeekday.map((r) =>
+      r.weekday === weekday ? { ...r, count } : r,
+    );
+    patchSettings({ requiredByWeekday: next });
+  }
+
+  function setMemberTarget(name: string, target: number) {
+    const next = { ...(settings.memberTargets ?? {}) };
+    if (Number.isFinite(target) && target > 0) next[name] = target;
+    else delete next[name];
+    patchSettings({ memberTargets: next });
+  }
+
+  function removeMemberTarget(name: string) {
+    const next = { ...(settings.memberTargets ?? {}) };
+    delete next[name];
+    patchSettings({ memberTargets: next });
+  }
+
+  function addMemberTarget() {
+    const name = prompt("対象メンバー名（姓だけでも可）を入力してください");
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const target = Number(prompt("月間目安日数を入力してください", "10") ?? "0");
+    if (!Number.isFinite(target) || target <= 0) return;
+    setMemberTarget(trimmed, target);
+  }
+
   return (
     <div>
       <PageHeader
         title="シフト生成"
         description="期間と必要人数を指定して、自動でシフト案を作成します。手動編集した枠は維持できます。"
       />
+
+      <section className="mb-6 rounded-md border border-slate-200 bg-white">
+        <details open>
+          <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            ハウスルール / 適用条件
+            <span className="ml-2 text-xs font-normal text-slate-500">
+              ここで編集した内容は保存され、次回以降の自動生成に反映されます
+            </span>
+          </summary>
+          <div className="space-y-5 border-t border-slate-200 px-4 py-4">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">
+                ルールメモ (自由記述・人間用)
+              </label>
+              <textarea
+                key={settings.houseRules ?? ""}
+                defaultValue={settings.houseRules ?? ""}
+                onBlur={(e) => patchSettings({ houseRules: e.target.value })}
+                rows={8}
+                className="w-full rounded border border-slate-300 px-2 py-1 text-xs leading-relaxed text-slate-700"
+                placeholder={"例: 朝はB番スタート、19時以降1人OK..."}
+              />
+              <p className="mt-1 text-[11px] text-slate-500">
+                ※ メモ自体はそのまま保存されます。実際の自動生成に効くのは下の構造化された設定です。
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600">
+                1日の最大人数 (曜日別)
+              </label>
+              <div className="grid grid-cols-7 gap-1 text-center text-xs">
+                {WEEKDAY_LABELS.map((lbl, i) => {
+                  const rule = settings.requiredByWeekday.find((r) => r.weekday === i);
+                  return (
+                    <label key={i} className="block">
+                      <span className={`block text-[10px] ${i === 0 || i === 6 ? "text-rose-500" : "text-slate-500"}`}>
+                        {lbl}
+                      </span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min={0}
+                        max={20}
+                        defaultValue={rule?.count ?? 4}
+                        onBlur={(e) => setWeekdayCount(i, Number(e.target.value))}
+                        className="w-full rounded border border-slate-300 px-1 py-0.5 text-center text-xs"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">
+                例: 火水木金=3, 月土日=3.5(6h枠あり)
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  朝のオープニングシフト
+                </label>
+                <select
+                  value={settings.morningShiftCode ?? "B"}
+                  onChange={(e) => patchSettings({ morningShiftCode: e.target.value })}
+                  className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                >
+                  {shiftTypes
+                    .filter((s) => !s.isOff && s.countAs >= 1)
+                    .map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.label}
+                      </option>
+                    ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  選択コードを各メンバーの優先候補シフトに置く（例: B = 10:00 開店）
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  既定の最大連勤 / 週上限
+                </label>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-500">最大連勤</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={14}
+                    defaultValue={settings.defaultMaxConsecutive}
+                    onBlur={(e) => patchSettings({ defaultMaxConsecutive: Number(e.target.value) })}
+                    className="w-14 rounded border border-slate-300 px-1 py-0.5 text-center"
+                  />
+                  <span className="text-slate-500">日</span>
+                  <span className="ml-3 text-slate-500">週上限</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={7}
+                    defaultValue={settings.defaultMaxPerWeek}
+                    onBlur={(e) => patchSettings({ defaultMaxPerWeek: Number(e.target.value) })}
+                    className="w-14 rounded border border-slate-300 px-1 py-0.5 text-center"
+                  />
+                  <span className="text-slate-500">日</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="block text-xs font-medium text-slate-600">
+                  メンバー別 月間目安日数 (優先順位の根拠)
+                </label>
+                <button
+                  type="button"
+                  onClick={addMemberTarget}
+                  className="rounded border border-dashed border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50"
+                >
+                  + 追加
+                </button>
+              </div>
+              <div className="space-y-1">
+                {Object.entries(settings.memberTargets ?? {}).length === 0 && (
+                  <p className="text-[11px] text-slate-400">
+                    まだ目安が設定されていません。「+ 追加」または個別メンバー名を入力。
+                  </p>
+                )}
+                {Object.entries(settings.memberTargets ?? {})
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([name, target]) => (
+                    <div key={name} className="flex items-center gap-2 text-xs">
+                      <span className="w-24 truncate">{name}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={31}
+                        defaultValue={target}
+                        onBlur={(e) => setMemberTarget(name, Number(e.target.value))}
+                        className="w-16 rounded border border-slate-300 px-1 py-0.5 text-center"
+                      />
+                      <span className="text-slate-500">日 / 月</span>
+                      <button
+                        type="button"
+                        onClick={() => removeMemberTarget(name)}
+                        title="削除"
+                        className="ml-2 rounded px-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">
+                目安より少ないメンバーが優先的に割り当てられます。姓だけ (例: 鈴木) でも、フルネーム (鈴木 絢也) と一致します。
+              </p>
+            </div>
+          </div>
+        </details>
+      </section>
 
       <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Field label="開始日">

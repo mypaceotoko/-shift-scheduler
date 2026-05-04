@@ -329,7 +329,7 @@ function collectCandidates(args: {
     if (!eligible) continue;
 
     // Determine candidate shift codes for this member.
-    const allowed = candidateShiftCodes(m, args.shiftTypes);
+    const allowed = candidateShiftCodes(m, args.shiftTypes, args.settings);
     if (allowed.length === 0) continue;
 
     // Capacity checks
@@ -344,14 +344,23 @@ function collectCandidates(args: {
     const maxConsecutive = m.constraints.maxConsecutive ?? args.settings.defaultMaxConsecutive;
     if (isConsecutive && consecutive >= maxConsecutive) continue;
 
-    // Score: prioritize unused members; tie-break on member.priority.
+    // Score:
+    // - balanceTerm pulls down members who already have many shifts
+    // - priorityTerm = member.priority (higher = more wanted)
+    // - targetGapTerm boosts members who are still under their monthly target
+    //   so the schedule converges toward the per-member targets the user set
+    //   in settings.memberTargets (e.g. 鈴木:22, 浜野:22, ...).
+    // - prefBonus mildly favors explicit ○
     const total = args.totalsByMember.get(m.id) ?? 0;
     const balanceTerm = args.settings.balanceWorkload ? -total * 2 : 0;
     const priorityTerm = m.priority;
+    const target = lookupMemberTarget(args.settings.memberTargets, m.name);
+    const targetGap = target > 0 ? Math.max(0, target - total) : 0;
+    const targetTerm = targetGap * 3;
     const prefBonus = pref?.status === "available" ? 1 : 0;
-    const weight = balanceTerm + priorityTerm + prefBonus;
+    const weight = balanceTerm + priorityTerm + targetTerm + prefBonus;
 
-    // Pick best shift for this member - simply the first allowed (could be smarter).
+    // Pick best shift for this member - first in the (re-ordered) allowed list.
     out.push({
       member: m,
       shiftCode: allowed[0],
@@ -362,14 +371,54 @@ function collectCandidates(args: {
   return out;
 }
 
-function candidateShiftCodes(member: Member, shiftTypes: ShiftType[]): string[] {
+/** Look up a target by name. Tries the full member name first, then the
+ *  last-name (Japanese surname before the first whitespace). This lets users
+ *  set targets as just "鈴木" while members are stored as "鈴木 絢也". */
+function lookupMemberTarget(
+  targets: Record<string, number> | undefined,
+  memberName: string,
+): number {
+  if (!targets) return 0;
+  if (targets[memberName] != null) return targets[memberName];
+  const surname = memberName.split(/\s+/)[0];
+  if (surname && targets[surname] != null) return targets[surname];
+  return 0;
+}
+
+function candidateShiftCodes(
+  member: Member,
+  shiftTypes: ShiftType[],
+  settings: SchedulerSettings,
+): string[] {
   const allowed = member.constraints.allowedShifts;
   const excluded = new Set(member.constraints.excludedShifts ?? []);
-  const codes = (allowed && allowed.length > 0
+  let codes = (allowed && allowed.length > 0
     ? allowed
     : shiftTypes.filter((s) => !s.isOff).map((s) => s.code)
   ).filter((c) => !excluded.has(c));
-  return codes;
+
+  // Reorder so that the morning opening shift (e.g. "B") comes first when the
+  // member is allowed to work it. The greedy fill picks codes[0], so this
+  // implements the "朝はB番スタート" house rule without forcing it on members
+  // who aren't trained for B.
+  const morning = settings.morningShiftCode;
+  if (morning && codes.includes(morning)) {
+    codes = [morning, ...codes.filter((c) => c !== morning)];
+  }
+
+  // Push half shifts (countAs < 1, e.g. "A") to the end. The user's rules say
+  // "Aなし" for the morning slot — but A is still useful for filling fractional
+  // capacity (3.5 person days). Keeping it last means full shifts win unless
+  // only 0.5 capacity remains.
+  const fullCodes = codes.filter((c) => {
+    const s = shiftTypes.find((t) => t.code === c);
+    return !s || s.countAs >= 1;
+  });
+  const halfCodes = codes.filter((c) => {
+    const s = shiftTypes.find((t) => t.code === c);
+    return s ? s.countAs < 1 : false;
+  });
+  return [...fullCodes, ...halfCodes];
 }
 
 function chooseShiftForRange(
