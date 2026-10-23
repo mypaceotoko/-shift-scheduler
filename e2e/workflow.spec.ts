@@ -105,10 +105,17 @@ test("verified CSV → staff contracts → worker generation → edit/undo → E
     fullPage: true,
   });
   await page.getByRole("link", { name: "Excel出力 →", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Excel出力とバックアップ", exact: true }),
+  ).toBeVisible();
   const ack = page.getByRole("checkbox", {
     name: /不足時間帯・人件費超過などを確認/,
   });
-  if (await ack.count()) await ack.check();
+  await expect(ack).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "6シートのExcelを作成", exact: true }),
+  ).toBeDisabled();
+  await ack.check();
   await page
     .getByRole("button", { name: "6シートのExcelを作成", exact: true })
     .click();
@@ -158,4 +165,66 @@ test("invalid HEIC produces an explanation and manual fallback remains usable", 
   await expect(
     page.getByLabel("氏名 手入力スタッフ", { exact: true }),
   ).toBeVisible();
+});
+
+test("multi-page PDF renders and a blank OCR result stays unconfirmed", async ({
+  page,
+}) => {
+  test.setTimeout(120000);
+  // Synthetic blank PDF: no private source documents or staff data in fixtures.
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << >> >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << >> >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, i) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${i + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 5\n0000000000 65535 f \n${offsets
+    .slice(1)
+    .map((n) => String(n).padStart(10, "0") + " 00000 n ")
+    .join(
+      "\n",
+    )}\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  await page.goto("import/");
+  await page.getByLabel("希望表ファイル", { exact: true }).setInputFiles({
+    name: "two-pages.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from(pdf),
+  });
+  const pages = page.getByLabel("原本ページ", { exact: true });
+  await expect(pages.locator("option")).toHaveCount(2);
+  await pages.selectOption("1");
+  const preview = page.getByRole("img", {
+    name: "two-pages.pdf · 2ページ",
+    exact: true,
+  });
+  await expect(preview).toBeVisible();
+  expect(
+    await preview.evaluate((image: HTMLImageElement) => image.naturalWidth),
+  ).toBeGreaterThan(0);
+  await page
+    .getByRole("button", { name: "このページを読み取る", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "日付列と氏名行を検出できません" }),
+  ).toBeVisible({ timeout: 90000 });
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("liberty-shift-state-v2")!).people
+          .length,
+    ),
+  ).toBe(0);
+  await page.reload();
+  await expect(
+    page.getByLabel("原本ページ", { exact: true }).locator("option"),
+  ).toHaveCount(2);
 });

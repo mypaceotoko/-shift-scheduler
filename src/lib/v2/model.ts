@@ -8,6 +8,8 @@ export const RULES = {
   frontMinimum: 2,
   porterMinimum: 2,
   holidayMinimum: 3,
+  porterEveningStart: "19:00",
+  porterEveningMinimum: 1,
 } as const;
 const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const iso = z

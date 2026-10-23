@@ -142,12 +142,12 @@ export function gaps(
   for (let t = minutes(d.open); t < minutes(d.close); t += 15) {
     const need =
       dept === "front"
-        ? 2
-        : t >= 1140
-          ? 1
+        ? RULES.frontMinimum
+        : t >= minutes(RULES.porterEveningStart)
+          ? RULES.porterEveningMinimum
           : (d.holiday ?? isOffDay(d.date))
-            ? 3
-            : 2;
+            ? RULES.holidayMinimum
+            : RULES.porterMinimum;
     const have = new Set(
       list
         .filter(
@@ -519,7 +519,7 @@ export function generate(
                 (minutes(g.end) - minutes(g.start)) *
                   ((g.need - g.have) ** 2 +
                     (g.have === 0 ? 4 : 0) +
-                    (g.start >= "19:00" ? 2 : 0)),
+                    (g.start >= RULES.porterEveningStart ? 2 : 0)),
               0,
             );
             const fair =
