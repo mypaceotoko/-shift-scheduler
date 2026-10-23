@@ -31,6 +31,18 @@ jobs:
           NEXT_PUBLIC_BASE_PATH: ${{ github.ref_name == 'main' && '/-shift-scheduler' || '/-shift-scheduler/preview-next' }}
       - name: Disable Jekyll
         run: touch out/.nojekyll
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:browser
+        env:
+          NEXT_PUBLIC_BASE_PATH: ${{ github.ref_name == 'main' && '/-shift-scheduler' || '/-shift-scheduler/preview-next' }}
+      - name: Browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-evidence
+          path: |
+            test-results/
+            playwright-report/
       - name: Publish to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:

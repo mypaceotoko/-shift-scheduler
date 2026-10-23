@@ -10,6 +10,7 @@
     "lint": "eslint src/lib/v2 src/components/v2 --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
     "postinstall": "node scripts/prepare-assets.mjs"
   },
   "dependencies": {
@@ -24,8 +25,12 @@
     "zod": "^4.6.7",
     "zustand": "^4.5.5"
   },
-  "overrides": { "uuid": "^11.1.1", "esbuild": "^0.28.1" },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "esbuild": "^0.28.1"
+  },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20.16.10",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

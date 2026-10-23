@@ -39,8 +39,11 @@ export const total = (s: State, d: string) =>
 function windowStart(p: Person, date: string, s: State) {
   const w = p.wishes[date];
   return w?.fromOpening
-    ? s.shifts.filter(t => t.department === p.department).map(t => t.start).sort()[0] ?? '09:30'
-    : w?.start ?? '09:30';
+    ? (s.shifts
+        .filter((t) => t.department === p.department)
+        .map((t) => t.start)
+        .sort()[0] ?? "09:30")
+    : (w?.start ?? "09:30");
 }
 export function desired(p: Person, date: string, s: State) {
   const w = p.wishes[date];
@@ -112,7 +115,10 @@ export function violations(
     e.push("部署の勤務コードと時刻が一致しません");
   if (w?.kind === "fixed" && w.code !== a.code)
     e.push("指定の勤務コードと異なります");
-  if (w?.kind === "window" && (a.start < windowStart(p, a.date, s) || a.end > w.end!))
+  if (
+    w?.kind === "window" &&
+    (a.start < windowStart(p, a.date, s) || a.end > w.end!)
+  )
     e.push("時間指定の範囲外です");
   if (p.allowed.length && !p.allowed.includes(a.code))
     e.push("許可されていないコードです");
@@ -225,7 +231,8 @@ export function audit(s: State): Issue[] {
     personId?: string,
   ) => result.push({ date, code, message, level, personId });
   for (const a of plan.assignments) {
-    if (a.date < plan.start || a.date > plan.end) push(a.date, 'period', '対象期間外の配置です', 'error', a.personId);
+    if (a.date < plan.start || a.date > plan.end)
+      push(a.date, "period", "対象期間外の配置です", "error", a.personId);
     const p = s.people.find((p) => p.id === a.personId);
     const key = a.date + "|" + a.personId;
     if (seen.has(key))
@@ -395,7 +402,10 @@ function candidates(p: Person, d: Day, s: State): Assignment[] {
     if (w.kind === "available")
       for (const t of s.shifts.filter((t) => t.department === p.department))
         add(t.start, t.end, t.code, t.rest);
-    const start = w.kind === "window" ? minutes(windowStart(p, d.date, s)) : minutes(d.open),
+    const start =
+        w.kind === "window"
+          ? minutes(windowStart(p, d.date, s))
+          : minutes(d.open),
       end = Math.min(
         w.kind === "window" ? minutes(w.end!) : minutes(d.close),
         minutes(d.close),

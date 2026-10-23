@@ -1,4 +1,5 @@
 import test from "node:test";
+import ExcelJS from "exceljs";
 import assert from "node:assert/strict";
 import {
   audit,
@@ -234,6 +235,11 @@ test("six-sheet Excel has exact snapshots, formulas, freeze panes and text-only 
   assert.equal(wb.getWorksheet("希望読取")!.getCell("A6").type, 3);
   assert.equal(wb.getWorksheet("シフト案")!.views[0].state, "frozen");
   assert.ok((await wb.xlsx.writeBuffer()).byteLength > 1000);
+  const roundTrip = new ExcelJS.Workbook();
+  await roundTrip.xlsx.load(await wb.xlsx.writeBuffer());
+  assert.equal(roundTrip.getWorksheet("計算")!.getCell("F2").result, 4);
+  assert.equal(roundTrip.getWorksheet("希望読取")!.getCell("A6").type, 3);
+  assert.equal(roundTrip.getWorksheet("シフト案")!.views[0].state, "frozen");
 });
 test("31-day mixed contracts: no hard violations and bounded compute", () => {
   const ds = days("2026-10-11", "2026-11-10"),
