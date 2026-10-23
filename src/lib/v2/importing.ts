@@ -19,6 +19,13 @@ export const emptyDraft = (): Draft => ({
   pages: [],
   warnings: [],
 });
+/** Normalize Japanese CSV explicitly before handing it to the binary workbook parser. */
+export function csvBytes(buffer: ArrayBuffer): ArrayBuffer {
+  let text: string;
+  try { text = new TextDecoder('utf-8', {fatal: true}).decode(buffer); }
+  catch { text = new TextDecoder('shift_jis', {fatal: true}).decode(buffer); }
+  return new TextEncoder().encode('\uFEFF' + text.replace(/^\uFEFF/, '')).buffer as ArrayBuffer;
+}
 export function parseInput(raw: string, s: State, reviewed: boolean): Wish {
   const t = s.shifts.find((t) => t.code === raw.trim());
   return t

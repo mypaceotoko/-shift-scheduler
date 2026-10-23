@@ -5,6 +5,7 @@ import { useWorkspace } from "@/lib/v2/storage";
 import { days, type Wish } from "@/lib/v2/model";
 import {
   dataURL,
+  csvBytes,
   emptyDraft,
   imageTransform,
   loadDraft,
@@ -80,7 +81,8 @@ export default function Importing() {
       for (const file of [...files]) {
         if (/\.(xlsx|csv)$/i.test(file.name)) {
           const { parseWorkbook } = await import("@/lib/excelImport");
-          const result = parseWorkbook(await file.arrayBuffer(), {
+          const buffer = await file.arrayBuffer();
+          const result = parseWorkbook(/\.csv$/i.test(file.name) ? csvBytes(buffer) : buffer, {
             defaultYear: +start.slice(0, 4),
             startMonth: +start.slice(5, 7),
           });

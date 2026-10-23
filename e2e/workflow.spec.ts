@@ -128,7 +128,7 @@ test("invalid HEIC produces an explanation and manual fallback remains usable", 
       mimeType: "image/heic",
       buffer: Buffer.from("invalid"),
     });
-  await expect(page.getByRole("alert")).toContainText("HEIC");
+  await expect(page.getByRole("alert").filter({hasText: 'HEIC'})).toContainText("HEIC");
   await page
     .getByText("手入力の表を用意する / 読取に失敗した場合", { exact: true })
     .click();

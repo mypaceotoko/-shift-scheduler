@@ -21,6 +21,14 @@ import {
 } from "../src/lib/v2/model";
 import { readLegacy } from "../src/lib/v2/storage";
 import { workbook } from "../src/lib/v2/workbook";
+import {csvBytes} from '../src/lib/v2/importing';
+import {parseWorkbook} from '../src/lib/excelImport';
+test('Japanese UTF-8 CSV retains names and availability symbols',()=>{
+  const csv=new TextEncoder().encode('名前,2026-10-13,2026-10-14\nテスト甲,○,／\nテスト乙,18.5-,有給\n');
+  const r=parseWorkbook(csvBytes(csv.buffer),{defaultYear:2026,startMonth:10});
+  assert.deepEqual(r.members,['テスト甲','テスト乙']);
+  assert.equal(r.records.find(x=>x.memberName==='テスト甲'&&x.date==='2026-10-13')?.rawCell,'○');
+});
 const date = "2026-10-13";
 const member = (
   id: string,
