@@ -311,6 +311,22 @@ test("Excel lookup distinguishes identical custom times with different breaks", 
     assert.equal(wb.getWorksheet("計算")!.getCell(`F${i + 2}`).result, 8 - i);
   }
 });
+test("equally flexible colleagues share reductions across the period", () => {
+  const ds = days("2026-10-11", "2026-10-17");
+  const s = setup(
+    Array.from({ length: 4 }, (_, i) => ({
+      ...member("person" + i, "○", i < 2 ? "kb" : "general"),
+      wishes: Object.fromEntries(
+        ds.map((d, n) => [d, parseWish(n === i ? "／" : "○", true)]),
+      ),
+    })),
+  );
+  s.plan = generate(s, ds[0], ds.at(-1)!, ds.map(defaultDay));
+  assert.equal(audit(s).filter((i) => i.level === "error").length, 0);
+  const group = reductions(s).filter((p) => p.contract === "general");
+  assert.equal(group[0].wish, group[1].wish);
+  assert.ok(Math.abs(group[0].actual - group[1].actual) <= 480);
+});
 test("31-day mixed contracts: no hard violations and bounded compute", () => {
   const ds = days("2026-10-11", "2026-11-10"),
     s = setup(

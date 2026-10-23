@@ -476,7 +476,12 @@ export function generate(
             !locks.some((a) => a.personId === p.id),
         )
         .map((p) => ({ p, options: candidates(p, d, s) }))
-        .sort((a, b) => a.options.length - b.options.length);
+        .sort(
+          (a, b) =>
+            a.options.length - b.options.length ||
+            (assigned[a.p.id] ?? 0) / (wishToDate[a.p.id] || 1) -
+              (assigned[b.p.id] ?? 0) / (wishToDate[b.p.id] || 1),
+        );
       const initial = locks.filter(
         (a) => s.people.find((p) => p.id === a.personId)?.department === dept,
       );
