@@ -4,7 +4,9 @@ import { days, RULES, minutes, type State, type Assignment } from "./model";
 import { weekdayLabel } from "../dateUtils";
 import { holidayName } from "../holidays";
 const label = (a: Assignment) =>
-  a.code === "CUSTOM" ? `${a.start}-${a.end}` : a.code;
+  a.code === "CUSTOM"
+    ? `${a.start}-${a.end}${a.rest ? `\n休憩${a.rest}分` : ""}`
+    : a.code;
 export async function workbook(s: State) {
   if (!s.plan) throw new Error("シフトが未生成です");
   const plan = s.plan,

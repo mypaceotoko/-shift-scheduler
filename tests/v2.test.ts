@@ -278,6 +278,39 @@ test("six-sheet Excel has exact snapshots, formulas, freeze panes and text-only 
   assert.equal(roundTrip.getWorksheet("希望読取")!.getCell("A6").type, 3);
   assert.equal(roundTrip.getWorksheet("シフト案")!.views[0].state, "frozen");
 });
+test("Excel lookup distinguishes identical custom times with different breaks", async () => {
+  const s = setup([member("one"), member("two")]);
+  s.plan = {
+    start: date,
+    end: date,
+    days: [defaultDay(date)],
+    lockedOff: [],
+    generatedAt: new Date().toISOString(),
+    assignments: s.people.map((p, i) => ({
+      personId: p.id,
+      date,
+      code: "CUSTOM",
+      start: "10:00",
+      end: "19:00",
+      rest: i ? 120 : 60,
+      breakStart: "13:00",
+      manual: true,
+    })),
+  };
+  const wb = await workbook(s);
+  const schedule = wb.getWorksheet("シフト案")!,
+    catalog = wb.getWorksheet("コード設定")!;
+  assert.notEqual(schedule.getCell("B6").text, schedule.getCell("B7").text);
+  for (let i = 0; i < 2; i++) {
+    const key = "porter|" + schedule.getCell(`B${i + 6}`).text;
+    const matches = catalog
+      .getRows(2, catalog.rowCount - 1)!
+      .filter((row) => row.getCell(1).value === key);
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].getCell(6).value, 8 - i);
+    assert.equal(wb.getWorksheet("計算")!.getCell(`F${i + 2}`).result, 8 - i);
+  }
+});
 test("31-day mixed contracts: no hard violations and bounded compute", () => {
   const ds = days("2026-10-11", "2026-11-10"),
     s = setup(
