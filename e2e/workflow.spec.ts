@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import ExcelJS from "exceljs";
 test("verified CSV → staff contracts → worker generation → edit/undo → Excel and persistence", async ({
   page,
 }, info) => {
@@ -15,15 +16,13 @@ test("verified CSV → staff contracts → worker generation → edit/undo → E
   await page
     .getByRole("link", { name: "希望表を取り込む →", exact: true })
     .click();
-  await page
-    .getByLabel("希望表ファイル", { exact: true })
-    .setInputFiles({
-      name: "wishes.csv",
-      mimeType: "text/csv",
-      buffer: Buffer.from(
-        "名前,2026-10-13,2026-10-14\nテスト甲,○,／\nテスト乙,18.5-,有給\nテスト丙,○,○\nテスト丁,○,○\n",
-      ),
-    });
+  await page.getByLabel("希望表ファイル", { exact: true }).setInputFiles({
+    name: "wishes.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(
+      "名前,2026-10-13,2026-10-14\nテスト甲,○,／\nテスト乙,18.5-,有給\nテスト丙,○,○\nテスト丁,○,○\n",
+    ),
+  });
   await expect(
     page.getByLabel("テスト甲 2026-10-13 希望", { exact: true }),
   ).toBeVisible();
@@ -110,25 +109,45 @@ test("verified CSV → staff contracts → worker generation → edit/undo → E
     name: /不足時間帯・人件費超過などを確認/,
   });
   if (await ack.count()) await ack.check();
-  const download = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "↓ 6シートのExcelを保存", exact: true })
+    .getByRole("button", { name: "6シートのExcelを作成", exact: true })
     .click();
-  expect((await download).suggestedFilename()).toMatch(/\.xlsx$/);
+  const ready = page.getByRole("link", {
+    name: "↓ 作成済みのExcelをダウンロード",
+    exact: true,
+  });
+  await expect(ready).toBeVisible();
+  const download = page.waitForEvent("download", { timeout: 15000 });
+  await ready.click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/\.xlsx$/);
+  const path = await file.path();
+  expect(path).toBeTruthy();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(path!);
+  expect(wb.worksheets.map((s) => s.name)).toEqual([
+    "シフト案",
+    "希望読取",
+    "チェック",
+    "コード設定",
+    "計算",
+    "削減集計",
+  ]);
+  expect(wb.getWorksheet("シフト案")!.getCell("A6").text).toContain("テスト甲");
   expect(errors).toEqual([]);
 });
 test("invalid HEIC produces an explanation and manual fallback remains usable", async ({
   page,
 }) => {
   await page.goto("import/");
-  await page
-    .getByLabel("希望表ファイル", { exact: true })
-    .setInputFiles({
-      name: "invalid.heic",
-      mimeType: "image/heic",
-      buffer: Buffer.from("invalid"),
-    });
-  await expect(page.getByRole("alert").filter({hasText: 'HEIC'})).toContainText("HEIC");
+  await page.getByLabel("希望表ファイル", { exact: true }).setInputFiles({
+    name: "invalid.heic",
+    mimeType: "image/heic",
+    buffer: Buffer.from("invalid"),
+  });
+  await expect(
+    page.getByRole("alert").filter({ hasText: "HEIC" }),
+  ).toContainText("HEIC");
   await page
     .getByText("手入力の表を用意する / 読取に失敗した場合", { exact: true })
     .click();

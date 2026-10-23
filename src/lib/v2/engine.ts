@@ -515,7 +515,11 @@ export function generate(
             const items = a ? [...b.items, a] : b.items;
             const lack = gaps(d, items, s, dept).reduce(
               (n, g) =>
-                n + (minutes(g.end) - minutes(g.start)) * (g.need - g.have),
+                n +
+                (minutes(g.end) - minutes(g.start)) *
+                  ((g.need - g.have) ** 2 +
+                    (g.have === 0 ? 4 : 0) +
+                    (g.start >= "19:00" ? 2 : 0)),
               0,
             );
             const fair =

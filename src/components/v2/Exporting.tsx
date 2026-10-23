@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useWorkspace, readLegacy } from "@/lib/v2/storage";
 import { stateSchema, RULES } from "@/lib/v2/model";
@@ -9,8 +9,22 @@ export default function Exporting() {
   const { data: s, replace } = useWorkspace();
   const [ack, setAck] = useState(false),
     [busy, setBusy] = useState(false),
+    [prepared, setPrepared] = useState<{ url: string; name: string } | null>(
+      null,
+    ),
     [message, setMessage] = useState(""),
     [error, setError] = useState("");
+  useEffect(
+    () => () => {
+      if (prepared) URL.revokeObjectURL(prepared.url);
+    },
+    [prepared],
+  );
+  useEffect(() => {
+    setPrepared(null);
+    setAck(false);
+    setMessage("");
+  }, [s]);
   if (!s) return null;
   const issues = audit(s),
     errors = issues.filter((i) => i.level === "error"),
@@ -20,12 +34,13 @@ export default function Exporting() {
     setError("");
     try {
       const { exportExcel } = await import("@/lib/v2/workbook");
-      download(
-        await exportExcel(s!),
-        `LIBERTY_${s!.plan!.start}_${s!.plan!.end}.xlsx`,
-      );
+      const blob = await exportExcel(s!);
+      setPrepared({
+        url: URL.createObjectURL(blob),
+        name: `LIBERTY_${s!.plan!.start}_${s!.plan!.end}.xlsx`,
+      });
       setMessage(
-        "6シートのExcelを書き出しました。チェックと削減集計を確認してください。",
+        "6シートのExcelを作成しました。ダウンロードして、チェックと削減集計を確認してください。",
       );
     } catch (e) {
       setError((e as Error).message);
@@ -113,8 +128,17 @@ export default function Exporting() {
           }
           onClick={() => void excel()}
         >
-          {busy ? "Excelを作成中…" : "↓ 6シートのExcelを保存"}
+          {busy ? "Excelを作成中…" : "6シートのExcelを作成"}
         </button>
+        {prepared ? (
+          <a
+            className="btn primary gap"
+            href={prepared.url}
+            download={prepared.name}
+          >
+            ↓ 作成済みのExcelをダウンロード
+          </a>
+        ) : null}
       </section>
       <div className="form-grid gap">
         <section className="panel">

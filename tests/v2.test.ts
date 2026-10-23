@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import assert from "node:assert/strict";
 import {
   audit,
+  gaps,
   budget,
   generate,
   reductions,
@@ -21,15 +22,43 @@ import {
 } from "../src/lib/v2/model";
 import { readLegacy } from "../src/lib/v2/storage";
 import { workbook } from "../src/lib/v2/workbook";
-import {csvBytes} from '../src/lib/v2/importing';
-import {parseWorkbook} from '../src/lib/excelImport';
-test('Japanese UTF-8 CSV retains names and availability symbols',()=>{
-  const csv=new TextEncoder().encode('名前,2026-10-13,2026-10-14\nテスト甲,○,／\nテスト乙,18.5-,有給\n');
-  const r=parseWorkbook(csvBytes(csv.buffer),{defaultYear:2026,startMonth:10});
-  assert.deepEqual(r.members,['テスト甲','テスト乙']);
-  assert.equal(r.records.find(x=>x.memberName==='テスト甲'&&x.date==='2026-10-13')?.rawCell,'○');
+import { csvBytes } from "../src/lib/v2/importing";
+import { parseWorkbook } from "../src/lib/excelImport";
+test("Japanese UTF-8 CSV retains names and availability symbols", () => {
+  const csv = new TextEncoder().encode(
+    "名前,2026-10-13,2026-10-14\nテスト甲,○,／\nテスト乙,18.5-,有給\n",
+  );
+  const r = parseWorkbook(csvBytes(csv.buffer), {
+    defaultYear: 2026,
+    startMonth: 10,
+  });
+  assert.deepEqual(r.members, ["テスト甲", "テスト乙"]);
+  assert.equal(
+    r.records.find(
+      (x) => x.memberName === "テスト甲" && x.date === "2026-10-13",
+    )?.rawCell,
+    "○",
+  );
 });
 const date = "2026-10-13";
+test("three available people stagger breaks and retain closing coverage", () => {
+  for (const d of ["2026-10-13", "2026-10-11"]) {
+    const s = setup(
+      Array.from({ length: 3 }, (_, i) => ({
+        ...member("person" + i),
+        wishes: { [d]: parseWish("○", true) },
+      })),
+    );
+    const p = generate(s, d, d, [defaultDay(d)]);
+    assert.equal(
+      gaps(defaultDay(d), p.assignments, s, "porter").filter(
+        (g) => g.have === 0,
+      ).length,
+      0,
+    );
+    assert.ok(p.assignments.some((a) => a.end === "23:00"));
+  }
+});
 const member = (
   id: string,
   wish = "○",
