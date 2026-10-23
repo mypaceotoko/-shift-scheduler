@@ -1,144 +1,81 @@
-# シフトスケジューラ (Shift Scheduler)
+# LIBERTY SHIFT SCHEDULER v2
 
-店舗向けのシフト作成支援Webアプリケーションです。  
-メンバーの希望表（Excelファイル / 画像）から取り込み、人数制約に沿って2週間分のシフトを自動生成・編集・出力できます。
+リバティヒルクラブ CS課・PORTERの月間シフト作成を支援する、GitHub Pages上のWebアプリです。
 
-参考レイアウトは画像のような **CS PORTER シフト表** です。
+[公開サイト](https://mypaceotoko.github.io/-shift-scheduler/) · [操作ガイド](docs/USER_GUIDE.md) · [監査・改修記録](docs/AUDIT_2026-10-24.md)
 
----
+## 操作の流れ
 
-## 主な機能
+1. JPG・PNG・PDF・XLSX・CSVを取り込みます。HEICはブラウザのデコード対応に依存します。
+2. 原本と読取表を照合し、氏名・日付・各希望を確認します。アップロードだけではスタッフを変更しません。
+3. スタッフの部署・契約区分を確認し、期間・休館日・営業時間を指定して生成します。
+4. 不足・制約違反・実働・削減を監査し、セルを編集します。元に戻す・やり直す操作に対応しています。
+5. Excelを作成し、表示されたリンクからダウンロードします。編集を再開するためのJSONも保存できます。
 
-- **メンバー管理**: 名前、優先度、許可/禁止シフト、週・連続勤務上限などを管理
-- **希望表の読み取り**: Excel/CSVから日付×メンバーの希望を取り込み、`○`／`／`／`A`/`B`/`13-18`/`-16` などを自動解釈
-- **不確定セルのレビュー**: パーサーが解釈できなかったセルをハイライトし、UI上で直接修正
-- **シフト自動生成**: 必要人数・優先度・希望・連勤・週上限を考慮した貪欲＋負荷均等化アルゴリズム
-- **シフト確認・編集**: メンバー別 / 日付別ビュー、セル直接編集、不足日のアラート
-- **エクスポート**: Excel (.xlsx) / 印刷用HTML / 状態のJSON保存・復元
-- **設定**: 曜日別必要人数、シフト種別（時間帯・重み・休フラグ）、既定値の編集
+## 業務ルール
 
-## 技術スタック
+ルールは `src/lib/v2/model.ts` のバージョン付き設定に集約しています。
 
-| レイヤ | 採用技術 | 補足 |
-| --- | --- | --- |
-| フロントエンド | Next.js 14 (App Router) + React 18 + TypeScript | GitHub Pages / Vercel どちらにも乗せやすい |
-| UI | Tailwind CSS | コンパクトで保守しやすい |
-| 状態管理 | Zustand + `persist` (localStorage) | データはブラウザに保存。サーバー不要 |
-| Excel I/O | `xlsx` (SheetJS) | 取り込み・書き出しを共通化 |
-| シフト最適化 | 自前の貪欲＋制約スコアリング (`src/lib/scheduler.ts`) | 制約最適化エンジンへの差し替えを想定し、UI/データと分離 |
+- 空欄・認識不明・未確認・勤務不可・有給には自動配置しません。
+- PORTERの実働は平日24h以内。土日祝は28h目安・30h上限で評価します。人数重みは使用しません。
+- 拘束・休憩・実働を分離し、休憩中の人員不足も監査します。
+- KB双葉はスタッフIDと契約区分で管理し、実働4h・8hだけを候補にします。
+- PORTERとフロントの勤務コードは部署別です。フロントAは8:45〜17:45です。
+- 時間指定・契約・勤務不可を優先します。人員不足は警告として残し、希望違反で補いません。
+- 有効な手動勤務・手動公休を保持して再生成できます。不正な保護セルは修正を求めて停止します。
+- 独立した監査でハード制約違反があるExcel出力を停止します。警告の残る案は明示確認して出力します。
 
-## ディレクトリ構成
+日別の幅制限付きビーム探索をWeb Workerで実行します。月全体の厳密な最適解を保証する方式ではありません。
 
-```
-.
-├── data/                          # サンプルデータ
-│   └── sample-preferences.csv
-├── public/
-├── src/
-│   ├── app/                       # 各ページ (Next.js App Router)
-│   │   ├── layout.tsx
-│   │   ├── page.tsx              # ダッシュボード
-│   │   ├── members/page.tsx      # メンバー管理
-│   │   ├── import/page.tsx       # 希望表の読み取り
-│   │   ├── generate/page.tsx     # シフト生成
-│   │   ├── schedule/page.tsx     # シフト確認・編集
-│   │   ├── export/page.tsx       # エクスポート
-│   │   ├── settings/page.tsx     # 設定
-│   │   └── globals.css
-│   ├── components/
-│   │   ├── Sidebar.tsx
-│   │   ├── PageHeader.tsx
-│   │   └── ScheduleGrid.tsx
-│   └── lib/
-│       ├── types.ts              # ドメイン型
-│       ├── store.ts              # Zustand ストア
-│       ├── scheduler.ts          # シフト生成ロジック
-│       ├── shiftTypes.ts         # 既定シフト種別
-│       ├── excel.ts              # Excel/CSV パース・出力
-│       ├── dateUtils.ts          # 日付ユーティリティ
-│       └── sampleData.ts         # サンプル
-├── package.json
-├── tsconfig.json
-├── tailwind.config.ts
-├── postcss.config.js
-├── next.config.js
-├── .gitignore
-├── .env.example
-└── LICENSE                        # MIT
-```
+## 保存とプライバシー
 
-## セットアップ
+原本と読取途中の表はIndexedDB、スタッフ・確定希望・生成案はlocalStorageへ保存します。外部のOCR APIへ原本を送信しません。Tesseractのエンジン・言語データの初回取得にはネット接続が必要です。
+
+旧版の保存領域は残し、原本JSONを書き出せます。旧データ移行時は契約と希望の再確認が必要です。端末やブラウザを変える場合はJSONバックアップを利用してください。JSONには読取途中の画像原本を含みません。
+
+## 実装
+
+| 領域 | 技術・場所 |
+| --- | --- |
+| 画面 | Next.js 16 / React 19 / TypeScript、`src/components/v2/` |
+| 共通ルール・型 | Zod、`src/lib/v2/model.ts` |
+| 生成・独立監査 | `src/lib/v2/engine.ts` / `generator.worker.ts` |
+| 希望取込 | SheetJS / Tesseract.js / PDF.js、`importing.ts` |
+| Excel出力 | ExcelJS、`workbook.ts`。6シート、数式・計算値・印刷設定付き |
+| 保存 | `storage.tsx`、localStorage / IndexedDB |
+| 公開 | 静的エクスポート、GitHub Actions / GitHub Pages |
+
+旧ライブラリは既存ファイルの構造解析や互換性のために残しています。公開画面のシフト生成はv2エンジンを使用します。
+
+## 開発と検証
+
+Node.js 24とnpmを使用します。
 
 ```bash
-# Node.js 20 以上を推奨
-npm install
-npm run dev    # http://localhost:3000
+npm ci
+npm run dev
 ```
 
-主なスクリプト:
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm audit
+npm run build
+npx playwright install --with-deps chromium webkit
+npm run test:browser
+```
 
-| コマンド | 内容 |
-| --- | --- |
-| `npm run dev` | 開発サーバー起動 |
-| `npm run build` | 本番ビルド |
-| `npm run start` | ビルド後の本番サーバー起動 |
-| `npm run typecheck` | TypeScript 型チェック |
-| `npm run lint` | ESLint |
+標準の公開パスは `/-shift-scheduler`。別パスへ配置するときは `NEXT_PUBLIC_BASE_PATH` を指定してビルドします。PDF workerはpostinstallとbuild時に配置します。
 
-## 使い方
+Actionsは型・lint・単体テスト・静的ビルド・ChromiumとiPhone相当のWebKitテストの通過後に公開します。作業ブランチは `preview-next/`、mainは公開サイトのルートへ配置します。実機iPhone Safariおよびホーム画面追加での確認は別途必要です。
 
-1. **サンプルデータを読み込む**: ダッシュボード右上の「サンプルデータを読み込む」ボタンで CS PORTER 風のメンバー・期間・希望が入ります。
-2. **希望表の読み取り**: `data/sample-preferences.csv` を取り込むと、`○`・`／`・固定シフト・`13-18` などが解釈され、不確定セルは黄色でハイライトされます。
-3. **シフト生成**: 期間と必要人数を確認し「生成する」を押すと、希望と制約に従って自動配置されます。「手動編集を維持して再計算」で部分修正後の再生成が可能。
-4. **シフト確認・編集**: メンバー別／日付別ビュー、セル編集、不足日の警告（赤背景）。
-5. **エクスポート**: Excel / 印刷HTML / JSON で書き出し。JSONをインポートすると環境を復元できます。
+## 対応上の限界
 
-## 希望表セルの解釈ルール
+手書きOCRは原本照合が必要です。氏名と契約対象者、休館・イベント・営業時間は当月資料で確認してください。祝日カレンダーは2026・2027年に対応し、それ以降は休日扱いを手動指定します。
 
-| 入力 | 解釈 |
-| --- | --- |
-| 空欄 / `○` / `◯` | 出勤可（任意のシフト） |
-| `／` / `/` / `x` / `休` / `公休` | 出勤不可 |
-| `T`, `B`, `D`, `S`, `C`, `F`, `A` | そのシフト固定 |
-| `13-18`, `13:00-18:00` | 時間帯指定（半日扱い） |
-| `18-` | その時刻以降出勤可 |
-| `-16` | その時刻まで出勤可 |
-| その他 | 不確定 → UIで要確認 |
-
-## シフト種別の既定値
-
-| コード | 時間 | 備考 |
-| --- | --- | --- |
-| S | 9:30-18:30 | |
-| T | 9:45-18:45 | |
-| B | 10:00-19:00 | |
-| C | 11:00-20:00 | |
-| D | 12:00-21:00 | |
-| F | 14:00-23:00 | |
-| A | 14:00- | 半日扱い (countAs=0.5) |
-| OFF | — | 公休 |
-
-設定画面から自由に追加・編集できます。
-
-## 設計意図
-
-- **ロジックとUIの分離**: 生成アルゴリズムは `src/lib/scheduler.ts` に閉じ込め、ページ側は Zustand のストア経由で呼び出すだけ。将来 OR-Tools などの制約最適化エンジンに差し替える際もUIに変更を波及させない。
-- **拡張しやすいシフト定義**: シフト種別は `ShiftType[]` として可変。半日（`countAs: 0.5`）や休フラグを設定すれば、生成ロジックがそのまま追従する。
-- **入力解釈の単一エントリ**: Excel・CSV・将来のOCR結果はいずれも `parseCellPreference()` を通すことで挙動を揃えている。
-- **手動編集の優先**: 自動生成時に `manuallyEdited: true` の枠は再計算で上書きしない。
-- **GitHub公開を意識**: 依存はクライアント側のみ、API/秘匿情報なし、`.env.example` のみ用意。
-
-## 拡張アイデア
-
-- 画像OCR (Tesseract.js やクラウドOCR) を `src/lib/excel.ts` 同様の形で追加
-- OR-Toolsベースの最適化サーバー (Python) を追加し、`scheduler.ts` の代替として呼び出し
-- サーバーサイド永続化 (SQLite, Supabase など)
-- 通知 (LINE / Slack) でメンバーに公開
-
-## デプロイ
-
-`npm run build` で生成される標準的な Next.js アプリのため、Vercel / Netlify / Cloudflare Pages / 任意の Node ホスティングにそのままデプロイできます。
+月間シフトと休憩込みの時間帯監査に対応しています。F/ロ/ゴミ/P/事務を30分単位で自動配置する完全な行動予定表生成は未実装です。スタッフの自由記述メモは自動制約として解釈しません。
 
 ## ライセンス
 
-MIT License - [LICENSE](./LICENSE) を参照。
+MIT — [LICENSE](LICENSE)

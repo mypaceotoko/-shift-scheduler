@@ -1,0 +1,83 @@
+"use client";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Provider, useWorkspace } from "@/lib/v2/storage";
+import type { ReactNode } from "react";
+const links = [
+  ["/", "概要", "◫"],
+  ["/import", "希望表の取り込み", "↑"],
+  ["/generate", "シフト生成", "✦"],
+  ["/schedule", "監査・調整", "▦"],
+  ["/export", "Excel出力", "↓"],
+  ["/members", "スタッフ", "♙"],
+  ["/settings", "設定", "⚙"],
+];
+function Inner({ children }: { children: ReactNode }) {
+  const { data, error, message } = useWorkspace(),
+    path = usePathname();
+  return (
+    <div className="shell">
+      <a className="skip" href="#main">
+        本文へ移動
+      </a>
+      <aside>
+        <Link href="/" className="brand">
+          <span className="brand-mark">L↗</span>
+          <span>
+            LIBERTY<small>SHIFT SCHEDULER</small>
+          </span>
+        </Link>
+        <p className="nav-label">ワークスペース</p>
+        <nav aria-label="メインナビゲーション">
+          {links.map(([url, label, icon]) => (
+            <Link
+              href={url}
+              key={url}
+              aria-current={
+                (path?.replace(/\/$/, "") || "/") === url ? "page" : undefined
+              }
+            >
+              <span aria-hidden="true">{icon}</span>
+              {label}
+            </Link>
+          ))}
+        </nav>
+        <div className="aside-foot">
+          ● この端末にデータを保存<small>CS課 / PORTER · v2.0</small>
+        </div>
+      </aside>
+      <div className="workspace">
+        <div className="topbar">
+          <span>リバティヒルクラブ / CS課</span>
+          <span className={error ? "red" : "saved"} role="status">
+            {error ? "保存状態を確認" : "● 端末内に自動保存"}
+          </span>
+        </div>
+        <main id="main" tabIndex={-1}>
+          {error ? (
+            <div className="notice danger" role="alert">
+              {error}
+            </div>
+          ) : null}
+          {message && message !== "端末に保存しました" ? (
+            <div className="notice" role="status">
+              {message}
+            </div>
+          ) : null}
+          {data ? (
+            children
+          ) : (
+            <div className="empty">保存データを読み込んでいます…</div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+export default function Shell({ children }: { children: ReactNode }) {
+  return (
+    <Provider>
+      <Inner>{children}</Inner>
+    </Provider>
+  );
+}

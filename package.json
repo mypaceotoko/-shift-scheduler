@@ -1,35 +1,44 @@
 {
   "name": "shift-scheduler",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "description": "店舗向けシフト作成支援Webアプリ - メンバー管理、希望表読み取り、自動シフト生成、Excel/JSON入出力",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/prepare-assets.mjs && next build --webpack",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint src/lib/v2 src/components/v2 --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/excelImport.test.ts tests/scheduler.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "postinstall": "node scripts/prepare-assets.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "next": "14.2.33",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "exceljs": "^4.4.0",
+    "next": "^16.4.2",
+    "pdfjs-dist": "^6.4.299",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "tesseract.js": "^5.1.1",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.6.7",
     "zustand": "^4.5.5"
   },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "esbuild": "^0.28.1"
+  },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20.16.10",
-    "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^8.57.1",
-    "eslint-config-next": "14.2.33",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
     "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.13",
+    "prettier": "^3.9.10",
     "tsx": "^4.21.0",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.72.0"
   }
 }

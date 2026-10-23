@@ -30,6 +30,8 @@ export type DayPreferenceStatus =
   | "uncertain"; // OCR / Excel could not interpret - needs review
 
 export interface DayPreference {
+  confidence?: number;
+  sourceBox?: { x0: number; y0: number; x1: number; y1: number };
   status: DayPreferenceStatus;
   /** Used when status = "fixed" or member supplied explicit code. */
   shiftCode?: ShiftCode;

@@ -1,22 +1,22 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import Shell from "@/components/v2/Shell";
 import "./globals.css";
-import Sidebar from "@/components/Sidebar";
-import SaveToast from "@/components/SaveToast";
-
 export const metadata: Metadata = {
-  title: "シフトスケジューラ",
-  description: "店舗向けシフト作成支援Webアプリ",
+  title: "LIBERTY | シフトスケジューラ",
+  description: "CS課・PORTERの勤務希望、月間シフト生成、監査、Excel出力。",
+  appleWebApp: { capable: true, title: "LIBERTY", statusBarStyle: "default" },
 };
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#123550",
+};
+export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
       <body>
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <main className="flex-1 p-6 lg:p-8 overflow-x-auto">{children}</main>
-        </div>
-        <SaveToast />
+        <Shell>{children}</Shell>
       </body>
     </html>
   );
