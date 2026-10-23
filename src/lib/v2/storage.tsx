@@ -1,0 +1,15 @@
+'use client';
+import {createContext,useContext,useEffect,useState,type ReactNode} from 'react';
+import {initialState,parseWish,stateSchema,type State,defaultDay} from './model';
+const KEY='liberty-shift-state-v2';
+export function readLegacy(raw:string):State{const parsed=JSON.parse(raw),old=parsed.state??parsed,next=initialState();if(!Array.isArray(old.members))throw new Error('旧データの形式が不正です');next.people=old.members.map((p:{id:string;name:string;active:boolean;preferences?:Record<string,{note?:string}>})=>({id:p.id,name:p.name,active:p.active,department:'porter',contract:'unknown',allowed:[],excluded:[],notes:'旧版から移行：部署・契約・希望を再確認',wishes:Object.fromEntries(Object.entries(p.preferences??{}).map(([d,w])=>[d,parseWish(w.note??'',false)]))}));if(old.schedule)next.plan={start:old.schedule.startDate,end:old.schedule.endDate,assignments:[],lockedOff:[],days:old.schedule.dayConfigs.map((d:{date:string;closed?:boolean;events?:string[]})=>({...defaultDay(d.date),porterClosed:!!d.closed,event:d.events?.join(' / ')??''}))};return stateSchema.parse(next);}
+type Context={data:State|null;change:(fn:(s:State)=>void)=>void;replace:(s:State)=>void;undo:()=>void;redo:()=>void;canUndo:boolean;canRedo:boolean;error:string;message:string;notice:(s:string)=>void;};const Ctx=createContext<Context|null>(null);
+export function Provider({children}:{children:ReactNode}){const [data,setData]=useState<State|null>(null),[past,setPast]=useState<State[]>([]),[future,setFuture]=useState<State[]>([]),[error,setError]=useState(''),[message,setMessage]=useState(''),[canSave,setCanSave]=useState(false);
+ useEffect(()=>{try{const raw=localStorage.getItem(KEY),old=localStorage.getItem('shift-scheduler-state-v1');setData(raw?stateSchema.parse(JSON.parse(raw)):old?readLegacy(old):initialState());setCanSave(true);if(!raw&&old)setMessage('旧データは元の保存領域に保全しました。部署・契約・希望を確認してください。旧版の割当はJSON保存から取り出せます。');}catch{setError('保存データを読み込めません。元の値は保持しています。JSONバックアップから復元してください。');setData(initialState());}},[]);
+ useEffect(()=>{if(!data||!canSave)return;try{localStorage.setItem(KEY,JSON.stringify(data));setError('');}catch{setError('端末保存に失敗しました。画面を閉じる前にJSONを書き出してください。');}},[data,canSave]);
+ const replace=(next:State)=>{try{const valid=stateSchema.parse(next);if(data)setPast([...past,data].slice(-25));setData(valid);setCanSave(true);setFuture([]);setMessage('端末に保存しました');}catch(e){setError(e instanceof Error?e.message:'入力内容を確認してください');}};
+ const change=(fn:(s:State)=>void)=>{if(!data)return;const next=structuredClone(data);fn(next);replace(next);};
+ const undo=()=>{if(!data||!past.length)return;setFuture([data,...future]);setData(past.at(-1)!);setPast(past.slice(0,-1));};const redo=()=>{if(!data||!future.length)return;setPast([...past,data]);setData(future[0]);setFuture(future.slice(1));};
+ return <Ctx.Provider value={{data,change,replace,undo,redo,canUndo:!!past.length,canRedo:!!future.length,error,message,notice:setMessage}}>{children}</Ctx.Provider>;
+}
+export function useWorkspace(){const value=useContext(Ctx);if(!value)throw new Error('Provider missing');return value;}
